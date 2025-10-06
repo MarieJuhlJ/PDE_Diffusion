@@ -1,0 +1,26 @@
+defaults:
+  - experiment: exp1
+  - dataset: dataset1
+  - scheduler: ddpm
+  - _self_
+
+wandb: False #Avoid logging to wandb
+k_folds: null #if null no cross-val, else give number of folds
+idx_fold: null
+seed: 42
+
+loss:
+  name: mse
+
+model:
+  name: dummy
+
+# Avoid logging to folders
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  job:
+    chdir: False
+  sweep:
+    dir: .
