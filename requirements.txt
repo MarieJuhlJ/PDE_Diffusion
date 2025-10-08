@@ -1,5 +1,5 @@
-torch==2.6.0
-torchvision==0.23.0
+torch==2.2.2
+torchvision==0.17.2
 uvicorn==0.34.2
 omegaconf==2.3.0
 lightning==2.5.5
