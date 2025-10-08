@@ -24,12 +24,12 @@ def test_model_dimensions():
         "model": {"name": "dummy"},
         "dataset":
         {
-            "size": {
+            "dims": {
                 "x": 64,
                 "y": 64,
-                "z": 2
+                "z": 3
             }
         }
     }))
 
-    assert model.sample_loop(batch_size=2).shape == (2, int(model.data_size.z), int(model.data_size.x), int(model.data_size.y))
+    assert model.sample_loop(batch_size=2).shape == (2, int(model.dataset.dims.z), int(model.dataset.dims.x), int(model.dataset.dims.y))
