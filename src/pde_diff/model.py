@@ -1,3 +1,4 @@
+from pde_diff import data
 import torch
 import lightning as pl
 from pde_diff.utils import SchedulerRegistry, LossRegistry, ModelRegistry
@@ -12,14 +13,14 @@ class DiffusionModel(pl.LightningModule):
         self.scheduler = SchedulerRegistry.create(cfg.scheduler)
         self.loss_fn = LossRegistry.create(cfg.loss)
         self.hp_config = cfg.experiment.hyperparameters
-        self.data_size = cfg.dataset.size
+        self.data_dims = cfg.dataset.dims
 
     def training_step(self, batch, batch_idx):
-        images = batch["images"]
-        noise = torch.randn_like(images)
-        steps = torch.randint(self.scheduler.config.num_train_timesteps, (images.size(0),), device=self.device)
-        noisy_images = self.scheduler.add_noise(images, noise, steps)
-        residual = self.model(noisy_images, steps).sample
+        sample = batch["data"]
+        noise = torch.randn_like(sample)
+        steps = torch.randint(self.scheduler.config.num_train_timesteps, (sample.size(0),), device=self.device)
+        noisy_images = self.scheduler.add_noise(sample, noise, steps)
+        residual = self.model(noisy_images, steps)
         loss = self.loss_fn(residual, noise)
         self.log("train_loss", loss, prog_bar=True)
         return loss
@@ -38,7 +39,7 @@ class DiffusionModel(pl.LightningModule):
         return samples
     
     def sample_loop(self, batch_size=1):
-        samples = torch.randn((batch_size,int(self.data_size.z), int(self.data_size.x), int(self.data_size.y)), device=self.device)
+        samples = torch.randn((batch_size,int(self.data_dims.z), int(self.data_dims.x), int(self.data_dims.y)), device=self.device)
         for t in reversed(range(self.scheduler.config.num_train_timesteps)):
             samples = self.forward(samples, t)
         return samples
@@ -47,12 +48,12 @@ class DiffusionModel(pl.LightningModule):
 class DummyModel(torch.nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        self.layer1 = torch.nn.Conv2d(2, 16, 3, padding=1)
-        self.layer2 = torch.nn.Conv2d(16, 2, 3, padding=1)
+        self.layer1 = torch.nn.Conv2d(3, 16, 3, padding=1)
+        self.layer2 = torch.nn.Conv2d(16, 3, 3, padding=1)
 
     def forward(self, x, t):
         x = torch.relu(self.layer1(x))
-        x = torch.relu(self.layer2(x))
+        x = self.layer2(x)
         return x
 
 if __name__ == "__main__":

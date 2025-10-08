@@ -2,6 +2,31 @@ from pathlib import Path
 from torch.utils.data import Dataset
 from omegaconf import DictConfig
 from pde_diff.utils import DatasetRegistry
+from torchvision import datasets, transforms
+
+@DatasetRegistry.register("cifar10")
+class CIFAR10(Dataset):
+    def __init__(self, cfg: DictConfig) -> None:
+        super().__init__()
+        self.transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((125.3, 123.0, 113.9), (63.0, 62.1, 66.7))
+        ])
+        self.inverse_transform = transforms.Compose([ transforms.Normalize((0., 0., 0. ),
+                                                     (1/63.0, 1/62.1, 1/66.7)),
+                                transforms.Normalize(( -125.3, -123.0, -113.9 ),
+                                                     (1., 1., 1.)),
+                               ])
+        self.dataset = datasets.CIFAR10(root=cfg.path, train=cfg.train, download=True, transform=self.transform)
+
+    def __len__(self) -> int:
+        """Return the length of the dataset."""
+        return len(self.dataset)
+    
+    def __getitem__(self, idx) -> dict:
+        """Return a given sample from the dataset."""
+        image, _ = self.dataset[idx]
+        return {"data": image}
 
 @DatasetRegistry.register("dataset1")
 class Dataset1(Dataset):

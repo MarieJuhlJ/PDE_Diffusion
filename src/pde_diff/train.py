@@ -1,16 +1,20 @@
 import os
 import hydra
+import torch
 
 import lightning as pl
 import torch.cuda as cuda
 from torch.utils.data import DataLoader, Subset
 from omegaconf import DictConfig, OmegaConf
 from sklearn.model_selection import KFold
+import matplotlib.pyplot as plt
+
 
 from pde_diff.utils import DatasetRegistry
 from pde_diff.model import DiffusionModel
+import pde_diff.data
 
-@hydra.main(config_name="config.yaml", config_path="../../configs")
+@hydra.main(version_base=None, config_name="config.yaml", config_path="../../configs")
 def train(cfg: DictConfig):
     hp_config =cfg.experiment.hyperparameters
     model = DiffusionModel(cfg)
@@ -18,6 +22,8 @@ def train(cfg: DictConfig):
     #Prepare datasets
     dataset_cfg = cfg.dataset.copy()  # Make a copy
     dataset_train = DatasetRegistry.create(cfg.dataset)
+    dataset_cfg.update({"train": False})  # Modify the copy for validation
+    dataset_val = DatasetRegistry.create(cfg.dataset)
 
     if cfg.get("k_folds", None):
         # Create a split and select appropriate subset of data for this fold:
@@ -27,7 +33,7 @@ def train(cfg: DictConfig):
         dataset_val = Subset(dataset_train, val_idx)
         dataset_train = Subset(dataset_train, train_idx)
 
-    train_dataloader = DataLoader(dataset_train, batch_size=hp_config.batch_size, shuffle=True, num_workers=4, seed=cfg.seed)
+    train_dataloader = DataLoader(dataset_train, batch_size=hp_config.batch_size, shuffle=True, num_workers=4)
     val_dataloader = DataLoader(dataset_val, batch_size=hp_config.batch_size, shuffle=False, num_workers=4)
 
     checkpoint_callback = pl.pytorch.callbacks.ModelCheckpoint(dirpath="./models", monitor="val_loss", mode="min")
@@ -51,6 +57,23 @@ def train(cfg: DictConfig):
         log_every_n_steps=hp_config.log_every_n_steps)
 
     trainer.fit(model, train_dataloader, val_dataloader)
+
+    # Save the final model
+    torch.save(model.state_dict(), f"./models/{wandb_name}-final.ckpt") 
+    print(f"Model saved to ./models/{wandb_name}-final.ckpt")
+
+    # plot samples
+    samples = model.sample_loop(batch_size=4)
+    # Reverse transform the samples
+    samples = dataset_train.inverse_transform(samples).cpu()
+    grid = torch.cat([samples[i] for i in range(samples.size(0))], dim=2)
+
+    plt.figure(figsize=(12, 6))
+    plt.imshow(grid.permute(1, 2, 0).numpy())
+    plt.axis("off")
+    plt.imsave(f"./models/{wandb_name}-samples.png", grid.permute(1, 2, 0).numpy())
+    print(f"Sample image saved to ./models/{wandb_name}-samples.png")
+    plt.show()
 
 if __name__ == "__main__":
     train()
