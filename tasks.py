@@ -15,6 +15,10 @@ def create_environment(ctx: Context) -> None:
         echo=True,
         pty=not WINDOWS,
     )
+    ctx.run(
+        f"conda activate {PROJECT_NAME}", echo=True, pty=not WINDOWS,
+    )
+    ctx.run(f"pip install invoke", echo=True, pty=not WINDOWS)
 
 @task
 def requirements(ctx: Context) -> None:
