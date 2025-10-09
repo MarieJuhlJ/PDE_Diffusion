@@ -40,7 +40,7 @@ def train(cfg: DictConfig):
 
     wandb_name = f"some_name-{cfg.experiment.name}"
     wandb_name += f"-{cfg.idx_fold}-of-{cfg.k_folds}-folds" if cfg.get("k_folds", None) else ""
-    
+
     acc = "gpu" if cuda.is_available() else "cpu"
 
     if cfg.wandb:
@@ -50,30 +50,17 @@ def train(cfg: DictConfig):
         logger = pl.pytorch.loggers.CSVLogger("logs", name=wandb_name)
 
     trainer = pl.Trainer(
-        accelerator=acc, 
-        max_epochs=hp_config.max_epochs, 
-        logger=logger, 
+        accelerator=acc,
+        max_epochs=hp_config.max_epochs,
+        logger=logger,
         callbacks=[checkpoint_callback],
         log_every_n_steps=hp_config.log_every_n_steps)
 
     trainer.fit(model, train_dataloader, val_dataloader)
 
     # Save the final model
-    torch.save(model.state_dict(), f"./models/{wandb_name}-final.ckpt") 
+    torch.save(model.state_dict(), f"./models/{wandb_name}-final.ckpt")
     print(f"Model saved to ./models/{wandb_name}-final.ckpt")
-
-    # plot samples
-    samples = model.sample_loop(batch_size=4)
-    # Reverse transform the samples
-    samples = dataset_train.inverse_transform(samples).cpu()
-    grid = torch.cat([samples[i] for i in range(samples.size(0))], dim=2)
-
-    plt.figure(figsize=(12, 6))
-    plt.imshow(grid.permute(1, 2, 0).numpy())
-    plt.axis("off")
-    plt.imsave(f"./models/{wandb_name}-samples.png", grid.permute(1, 2, 0).numpy())
-    print(f"Sample image saved to ./models/{wandb_name}-samples.png")
-    plt.show()
 
 if __name__ == "__main__":
     train()
