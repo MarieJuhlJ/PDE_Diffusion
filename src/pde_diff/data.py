@@ -32,7 +32,7 @@ class Dataset1(Dataset):
 @DatasetRegistry.register("fluid_data")
 class FluidData(Dataset):
     def __init__(self, cfg: DictConfig):
-        super().__init__()        
+        super().__init__()
         self.data_paths = list(cfg.data_directories)
         channels = len(self.data_paths)
 

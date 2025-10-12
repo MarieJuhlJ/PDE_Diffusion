@@ -14,6 +14,7 @@ loss:
 
 model: #TODO: Maybe we should merge data and model cfg?
   name: dummy
+  save_best_model: true
   dims:
     x: 64
     y: 64

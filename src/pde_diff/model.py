@@ -9,11 +9,12 @@ import pde_diff.loss
 class DiffusionModel(pl.LightningModule):
     def __init__(self, cfg):
         super().__init__()
-        self.model = ModelRegistry.create(cfg.model) # Replace with actual model
+        self.model = ModelRegistry.create(cfg.model)
         self.scheduler = SchedulerRegistry.create(cfg.scheduler)
         self.loss_fn = LossRegistry.create(cfg.loss)
         self.hp_config = cfg.experiment.hyperparameters
         self.data_dims = cfg.dataset.dims
+        self.save_model = cfg.model.save_best_model
 
     def training_step(self, batch, batch_idx):
         sample = batch if isinstance(batch, torch.Tensor) else batch["data"]
@@ -24,6 +25,51 @@ class DiffusionModel(pl.LightningModule):
         loss = self.loss_fn(residual, noise)
         self.log("train_loss", loss, prog_bar=True)
         return loss
+
+    def validation_step(self, batch, batch_idx):
+        sample = batch if isinstance(batch, torch.Tensor) else batch["data"]
+        noise = torch.randn_like(sample)
+        steps = torch.randint(self.scheduler.config.num_train_timesteps, (sample.size(0),), device=self.device)
+        noisy_images = self.scheduler.add_noise(sample, noise, steps)
+        residual = self.model(noisy_images, steps)
+        loss = self.loss_fn(residual, noise)
+        self.log("val_loss", loss, prog_bar=True)
+        return loss
+
+    def on_validation_epoch_end(self):
+        if not self.save_model or self.trainer.global_rank != 0:
+            return
+
+        metric = self.trainer.callback_metrics.get(self.monitor)
+        if metric is None:
+            return
+
+        current = float(metric.detach().cpu())
+        if (
+            self.best_score is None
+            or (self.mode == "min" and current < self.best_score)
+            or (self.mode == "max" and current > self.best_score)
+        ):
+            self.best_score = current
+            save_dir = self._resolve_save_dir()
+
+            tag = f"best-{self.monitor}={current:.4f}-epoch={self.current_epoch}"
+            ckpt_path = save_dir / f"{tag}.ckpt"
+            self.trainer.save_checkpoint(ckpt_path)
+            torch.save(self.state_dict(), save_dir / f"{tag}-weights.pt")
+
+            self._save_cfg(save_dir)
+
+            best_ckpt = save_dir / "best.ckpt"
+            try:
+                best_ckpt.unlink(missing_ok=True)
+                best_ckpt.symlink_to(ckpt_path.name)
+            except Exception:
+                import shutil
+                shutil.copyfile(ckpt_path, best_ckpt)
+
+            self.log("best_model_improved", 1.0, prog_bar=True)
+
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.hp_config.lr, weight_decay=self.hp_config.weight_decay)
@@ -44,6 +90,9 @@ class DiffusionModel(pl.LightningModule):
             samples = self.forward(samples, t)
         return samples
 
+    def load_model(self, path):
+        self.load_state_dict(torch.load(path, map_location=self.device))
+
 @ModelRegistry.register("dummy")
 class DummyModel(torch.nn.Module):
     def __init__(self, cfg):
@@ -56,7 +105,7 @@ class DummyModel(torch.nn.Module):
         x = torch.relu(self.layer1(x))
         x = self.layer2(x)
         return x
-    
+
 @ModelRegistry.register("unet2d")
 class UNet2DWrapper(torch.nn.Module):
     def __init__(self, cfg):
