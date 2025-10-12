@@ -18,7 +18,7 @@ def plot_samples(model, n=4, path=Path('./reports/figures')):
 if __name__ == "__main__":
     model_path = Path('./models')
     model_id = 'exp1-bqkez'
-    
+
     with open(model_path / model_id / 'config.yaml', 'r') as f:
         cfg = yaml.safe_load(f)
     cfg = dict_to_namespace(cfg)
@@ -26,6 +26,3 @@ if __name__ == "__main__":
     diffusion_model.load_model(model_path / model_id / f"best-{cfg.model.monitor}-weights.pt")
     diffusion_model = diffusion_model.to('cuda' if torch.cuda.is_available() else 'cpu')
     plot_samples(diffusion_model, n=4)
-    
-
-
