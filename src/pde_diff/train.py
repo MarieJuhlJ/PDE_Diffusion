@@ -40,7 +40,7 @@ def train(cfg: DictConfig):
 
     wandb_name = f"some_name-{cfg.experiment.name}"
     wandb_name += f"-{cfg.idx_fold}-of-{cfg.k_folds}-folds" if cfg.get("k_folds", None) else ""
-    
+
     acc = "gpu" if cuda.is_available() else "cpu"
 
     if cfg.wandb:
@@ -50,16 +50,16 @@ def train(cfg: DictConfig):
         logger = pl.pytorch.loggers.CSVLogger("logs", name=wandb_name)
 
     trainer = pl.Trainer(
-        accelerator=acc, 
-        max_epochs=hp_config.max_epochs, 
-        logger=logger, 
+        accelerator=acc,
+        max_epochs=hp_config.max_epochs,
+        logger=logger,
         callbacks=[checkpoint_callback],
         log_every_n_steps=hp_config.log_every_n_steps)
 
     trainer.fit(model, train_dataloader, val_dataloader)
 
     # Save the final model
-    torch.save(model.state_dict(), f"./models/{wandb_name}-final.ckpt") 
+    torch.save(model.state_dict(), f"./models/{wandb_name}-final.ckpt")
     print(f"Model saved to ./models/{wandb_name}-final.ckpt")
 
     # plot samples

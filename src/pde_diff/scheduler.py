@@ -8,7 +8,7 @@ class Scheduler:
     def add_noise(self, images, noise, steps):
         # Implement noise addition logic here
         return images + noise  # Placeholder implementation
-    
+
 @SchedulerRegistry.register("ddpm")
 class DDPM_Scheduler(Scheduler):
     def __init__(self, config):
@@ -22,12 +22,12 @@ class DDPM_Scheduler(Scheduler):
         self.alpha_cumprod = torch.cumprod(self.alphas, dim=0)
         self.alpha_cumprod_prev = torch.cat([torch.tensor([1.0]), self.alpha_cumprod[:-1]])
         self.sigmas = torch.sqrt(self.betas)
-    
+
     def add_noise(self, samples, noise, steps):
         sqrt_alpha_cumprod = torch.sqrt(self.alpha_cumprod[steps])[:, None, None, None]
         sqrt_one_minus_alpha_cumprod = torch.sqrt(1 - self.alpha_cumprod[steps])[:, None, None, None]
         return sqrt_alpha_cumprod * samples + sqrt_one_minus_alpha_cumprod * noise
-    
+
     def sample(self, model_output, timesteps, sample):
         alpha_sqrt = torch.sqrt(self.alphas[timesteps])[:, None, None, None]
         one_minus_alpha = 1 - self.alphas[timesteps]

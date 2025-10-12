@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 class LayerRegistry:
     _registry = {}
 
@@ -26,9 +28,16 @@ class DatasetRegistry:
 
     @classmethod
     def create(cls, cfg):
+        if isinstance(cfg, dict):
+            cfg = SimpleNamespace(**cfg)
+
         if cfg.name not in cls._registry:
             raise ValueError(f"Unknown dataset: {cfg.name}")
-        return cls._registry[cfg.name](cfg)
+
+        dataset_cls = cls._registry[cfg.name]
+
+        kwargs = {k: v for k, v in vars(cfg).items() if k != "name"}
+        return dataset_cls(**kwargs)
 
 class LossRegistry:
     _registry = {}
@@ -45,7 +54,7 @@ class LossRegistry:
         if cfg.name not in cls._registry:
             raise ValueError(f"Unknown loss function: {cfg.name}")
         return cls._registry[cfg.name](cfg)
-    
+
 class SchedulerRegistry:
     _registry = {}
 
@@ -76,4 +85,4 @@ class ModelRegistry:
     def create(cls, cfg):
         if cfg.name not in cls._registry:
             raise ValueError(f"Unknown model: {cfg.name}")
-        return cls._registry[cfg.name](cfg)
+        return cls._registry[cfg.name](*cfg)
