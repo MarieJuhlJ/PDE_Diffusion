@@ -9,7 +9,6 @@ from omegaconf import DictConfig, OmegaConf
 from sklearn.model_selection import KFold
 import matplotlib.pyplot as plt
 
-
 from pde_diff.utils import DatasetRegistry
 from pde_diff.model import DiffusionModel
 import pde_diff.data
@@ -38,7 +37,7 @@ def train(cfg: DictConfig):
 
     checkpoint_callback = pl.pytorch.callbacks.ModelCheckpoint(dirpath="./models", monitor="val_loss", mode="min")
 
-    wandb_name = f"some_name-{cfg.experiment.name}"
+    wandb_name = f"{cfg.experiment.name}"
     wandb_name += f"-{cfg.idx_fold}-of-{cfg.k_folds}-folds" if cfg.get("k_folds", None) else ""
 
     acc = "gpu" if cuda.is_available() else "cpu"

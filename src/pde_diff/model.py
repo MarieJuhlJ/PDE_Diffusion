@@ -1,10 +1,10 @@
 from pde_diff import data
 import torch
 import lightning as pl
+from diffusers import UNet2DModel
 from pde_diff.utils import SchedulerRegistry, LossRegistry, ModelRegistry
 import pde_diff.scheduler
 import pde_diff.loss
-from omegaconf import OmegaConf
 
 class DiffusionModel(pl.LightningModule):
     def __init__(self, cfg):
@@ -16,25 +16,13 @@ class DiffusionModel(pl.LightningModule):
         self.data_dims = cfg.dataset.dims
 
     def training_step(self, batch, batch_idx):
-        sample = batch["data"]
+        sample = batch if isinstance(batch, torch.Tensor) else batch["data"]
         noise = torch.randn_like(sample)
         steps = torch.randint(self.scheduler.config.num_train_timesteps, (sample.size(0),), device=self.device)
         noisy_images = self.scheduler.add_noise(sample, noise, steps)
         residual = self.model(noisy_images, steps)
         loss = self.loss_fn(residual, noise)
         self.log("train_loss", loss, prog_bar=True)
-        return loss
-
-    def validation_step(self, batch, batch_idx): # this is crap
-        sample = batch["data"]
-        noise = torch.randn_like(sample)
-        steps = torch.randint(self.scheduler.config.num_train_timesteps, (sample.size(0),), device=self.device)
-        noisy_images = self.scheduler.add_noise(sample, noise, steps)
-        residual = self.model(noisy_images, steps)
-        loss = self.loss_fn(residual, noise)
-        self.log("val_loss", loss, prog_bar=True)
-        mse = torch.nn.functional.mse_loss(residual, noise)
-        self.log("val_mse", mse, prog_bar=True)
         return loss
 
     def configure_optimizers(self):
@@ -59,6 +47,7 @@ class DiffusionModel(pl.LightningModule):
 @ModelRegistry.register("dummy")
 class DummyModel(torch.nn.Module):
     def __init__(self, cfg):
+        breakpoint()
         super().__init__()
         self.layer1 = torch.nn.Conv2d(3, 16, 3, padding=1)
         self.layer2 = torch.nn.Conv2d(16, 3, 3, padding=1)
@@ -67,6 +56,35 @@ class DummyModel(torch.nn.Module):
         x = torch.relu(self.layer1(x))
         x = self.layer2(x)
         return x
+    
+@ModelRegistry.register("unet2d")
+class UNet2DWrapper(torch.nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        in_channels = int(cfg.dims.z)
+        out_channels = int(cfg.dims.z)
+        self.unet = UNet2DModel(
+            sample_size=int(cfg.dims.x),  # only needed for some schedulers
+            in_channels=in_channels,
+            out_channels=out_channels,
+            layers_per_block=2,
+            block_out_channels=(64, 128, 256, 512),
+            down_block_types=(
+                "DownBlock2D",
+                "DownBlock2D",
+                "AttnDownBlock2D",
+                "DownBlock2D",
+            ),
+            up_block_types=(
+                "UpBlock2D",
+                "AttnUpBlock2D",
+                "UpBlock2D",
+                "UpBlock2D",
+            ),
+        )
+
+    def forward(self, x, t):
+        return self.unet(sample=x, timestep=t).sample
 
 if __name__ == "__main__":
     pass

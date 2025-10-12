@@ -31,16 +31,9 @@ class Dataset1(Dataset):
 
 @DatasetRegistry.register("fluid_data")
 class FluidData(Dataset):
-    def __init__(
-        self,
-        data_directories,
-        use_double = False,
-        return_img = True,
-        gaussian_prior = False,
-    ):
-        super().__init__()
-        # Assuming data_directories is a tuple of file paths
-        self.data_paths = list(data_directories)
+    def __init__(self, cfg: DictConfig):
+        super().__init__()        
+        self.data_paths = list(cfg.data_directories)
         channels = len(self.data_paths)
 
         for i in range(channels):
@@ -49,17 +42,12 @@ class FluidData(Dataset):
             else:
                 self.data = np.stack((self.data, pd.read_csv(self.data_paths[i], header=None)), axis=-1)
 
-        # convert to torch tensor
-        dtype = torch.float64 if use_double else torch.float32
+        dtype = torch.float64 if cfg.use_double else torch.float32
         self.data = torch.tensor(self.data, dtype=dtype)
         self.num_datapoints = len(self.data)
 
-        if return_img:
-            assert len(self.data.shape) == 3, "Data must be of shape (num_datapoints, pixels_x*pixels_y, channels)"
-            self.data = generalized_b_xy_c_to_image(self.data)
-
-        if gaussian_prior:
-            self.data = torch.randn_like(self.data)
+        assert len(self.data.shape) == 3
+        self.data = generalized_b_xy_c_to_image(self.data)
 
     def normalize(self, arr, min_val, max_val):
         return (arr - min_val) / (max_val - min_val)
@@ -83,15 +71,10 @@ def generalized_b_xy_c_to_image(tensor, pixels_x=None, pixels_y=None):
     """
     if pixels_x is None or pixels_y is None:
         pixels_x = pixels_y = int(np.sqrt(tensor.shape[1]))
-    num_dims = len(tensor.shape) - 2  # Subtracting batch and pixel dimensions (NOTE that we assume two pixel dimensions that are FLATTENED into one dimension)
+    num_dims = len(tensor.shape) - 2
     pattern = 'b (x y) ' + ' '.join([f'c{i}' for i in range(num_dims)]) + f' -> b ' + ' '.join([f'c{i}' for i in range(num_dims)]) + ' x y'
     return rearrange(tensor, pattern, x=pixels_x, y=pixels_y)
 
-def get_train_val_dataset(cfg):
-    train = DatasetRegistry.create(cfg)
-    cfg.update({"train": False})
-    val = DatasetRegistry.create(cfg)
-    return train, val
 
 if __name__ == "__main__":
     data_dirs = ('./data/darcy/K_data.csv', './data/darcy/p_data.csv')

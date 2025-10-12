@@ -5,7 +5,7 @@ import itertools
 import time
 import numpy as np
 import pandas as pd
-from concurrent.futures import ProcessPoolExecutor
+from tqdm.contrib.concurrent import process_map
 from scipy.stats import norm
 from scipy.linalg import eigh
 from scipy.linalg import lstsq
@@ -166,21 +166,23 @@ def generate_sample(args):
 
     return K.flatten(), p.flatten(), np.abs(residual_test).mean(), unique_seed
 
-def main():
+def _wrap_generate_sample(arg_tuple):
+    # unpack so we can use process_map (no starmap variant)
+    return generate_sample(arg_tuple)
 
+def main():
     start_time = time.time()
 
-    # num_processes = int(sys.argv[1])
-    num_processes = 1
-    n_samples = 10
+    # num_processes = int(sys.argv[1])  # optional CLI override
+    n_samples = 500
 
     pixels_per_dim = 64
     pixels_at_boundary = True
-    domain_length = 1.
+    domain_length = 1.0
     length_scale = 0.1
-    q = 64  # number of KLE coefficients
+    q = 64   # number of KLE coefficients
     acc = 2
-    reverse_dy = True # reverse y axis for consistency in plots (y goes from bottom to top)
+    reverse_dy = True  # reverse y axis for consistency in plots (y goes from bottom to top)
 
     shape = (pixels_per_dim, pixels_per_dim)
     evaluation_points = uniform_points_pixelwise(pixels_per_dim, domain_length, pixels_at_boundary)
@@ -194,24 +196,36 @@ def main():
 
     cov_matrix = complete_covariance_matrix(evaluation_points, length_scale)
     eigenvalues, eigenvectors = compute_eigenpairs(cov_matrix, q)
-    f_s = create_f_s(evaluation_points[:,0], evaluation_points[:,1])
+    f_s = create_f_s(evaluation_points[:, 0], evaluation_points[:, 1])
 
     xmin_bd, xmax_bd, ymin_bd, ymax_bd = create_boundary_idcs(shape)
 
     # add integral constraint - trapezoidal rule if outer pixels are at boundary, otherwise simple mean
-    if pixels_at_boundary:
-        use_trapezoid = True
-    else:
-        use_trapezoid = False
+    use_trapezoid = bool(pixels_at_boundary)
     int_cond = create_int_cond(use_trapezoid, shape, d0)
 
-    args = [(i, eigenvalues, eigenvectors, q, pixels_per_dim, shape, acc, d0, d1, f_s, int_cond, xmin_bd, xmax_bd, ymin_bd, ymax_bd, reverse_dy) for i in range(n_samples)]
+    args = [
+        (i, eigenvalues, eigenvectors, q, pixels_per_dim, shape, acc, d0, d1,
+         f_s, int_cond, xmin_bd, xmax_bd, ymin_bd, ymax_bd, reverse_dy)
+        for i in range(n_samples)
+    ]
 
-    # create a pool of processes
-    with ProcessPoolExecutor(max_workers=num_processes) as executor:
-        results = list(executor.map(generate_sample, args))
+    cpu_cnt = os.cpu_count() or 1
+    num_processes = max(1, min(cpu_cnt - 1, n_samples))
 
-    print(f"Time elapsed for data generation: {time.time() - start_time}")
+    chunksize = max(1, n_samples // (num_processes * 4))
+
+    results = process_map(
+        _wrap_generate_sample,
+        args,
+        max_workers=num_processes,
+        chunksize=chunksize,
+        desc="Generating samples",
+        unit="sample"
+    )
+    print("Done! Got", len(results), "results.")
+
+    print(f"Time elapsed for data generation: {time.time() - start_time:.2f}s")
     mid_time = time.time()
 
     print('Finished generating samples. Saving...')
@@ -219,19 +233,17 @@ def main():
     data_K, data_p, data_res, data_seed = zip(*results)
 
     save_dir = './data/darcy/'
-
     os.makedirs(save_dir, exist_ok=True)
-    pd.DataFrame(data_seed).to_csv(save_dir + 'seeds.csv', index=False, header=False)
-    pd.DataFrame(data_K).to_csv(save_dir + 'K_data.csv', index=False, header=False)
-    pd.DataFrame(data_p).to_csv(save_dir + 'p_data.csv', index=False, header=False)
-    pd.DataFrame(data_res).to_csv(save_dir + 'res_data.csv', index=False, header=False)
+    pd.DataFrame(data_seed).to_csv(os.path.join(save_dir, 'seeds.csv'), index=False, header=False)
+    pd.DataFrame(data_K).to_csv(os.path.join(save_dir, 'K_data.csv'), index=False, header=False)
+    pd.DataFrame(data_p).to_csv(os.path.join(save_dir, 'p_data.csv'), index=False, header=False)
+    pd.DataFrame(data_res).to_csv(os.path.join(save_dir, 'res_data.csv'), index=False, header=False)
 
     # check that we truly have unique seeds
     if len(np.unique(data_seed)) != n_samples:
         raise ValueError('Seeds are not unique!')
 
-    print(f'Time elapsed for data storing: {time.time() - mid_time}')
-
+    print(f'Time elapsed for data storing: {time.time() - mid_time:.2f}s')
     print('Data generation finished.')
 
 if __name__ == "__main__":

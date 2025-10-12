@@ -28,16 +28,9 @@ class DatasetRegistry:
 
     @classmethod
     def create(cls, cfg):
-        if isinstance(cfg, dict):
-            cfg = SimpleNamespace(**cfg)
-
         if cfg.name not in cls._registry:
             raise ValueError(f"Unknown dataset: {cfg.name}")
-
-        dataset_cls = cls._registry[cfg.name]
-
-        kwargs = {k: v for k, v in vars(cfg).items() if k != "name"}
-        return dataset_cls(**kwargs)
+        return cls._registry[cfg.name](cfg)
 
 class LossRegistry:
     _registry = {}
@@ -85,4 +78,4 @@ class ModelRegistry:
     def create(cls, cfg):
         if cfg.name not in cls._registry:
             raise ValueError(f"Unknown model: {cfg.name}")
-        return cls._registry[cfg.name](*cfg)
+        return cls._registry[cfg.name](cfg)

@@ -19,7 +19,7 @@ class PDE_loss(nn.Module):
 
 @LossRegistry.register("mse")
 class MSE(nn.Module):
-    def __init__(self):
+    def __init__(self, cfg):
         super().__init__()
 
     def forward(self, model_output, target):
@@ -27,7 +27,7 @@ class MSE(nn.Module):
 
 @LossRegistry.register("darcy_flow")
 class DarcyLoss(PDE_loss):
-    def __init__(self):
+    def __init__(self, cfg):
         residual_fns = [self.darcy_residual_loss]
         weights = [1.0]
         super().__init__(residual_fns, weights)
