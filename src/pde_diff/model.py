@@ -2,7 +2,9 @@ from pde_diff import data
 import torch
 import lightning as pl
 from diffusers import UNet2DModel
-from pde_diff.utils import SchedulerRegistry, LossRegistry, ModelRegistry
+from omegaconf import OmegaConf
+from pde_diff.utils import SchedulerRegistry, LossRegistry, ModelRegistry, unique_id
+from pathlib import Path
 import pde_diff.scheduler
 import pde_diff.loss
 
@@ -14,7 +16,13 @@ class DiffusionModel(pl.LightningModule):
         self.loss_fn = LossRegistry.create(cfg.loss)
         self.hp_config = cfg.experiment.hyperparameters
         self.data_dims = cfg.dataset.dims
+
+        self.cfg = cfg
         self.save_model = cfg.model.save_best_model
+        self.monitor = cfg.model.monitor
+        self.mode = cfg.model.mode
+        self.best_score = None
+        self.save_dir = Path(cfg.model.save_dir) / Path(cfg.experiment.name + "-" + unique_id(length=5)) if self.save_model else None
 
     def training_step(self, batch, batch_idx):
         sample = batch if isinstance(batch, torch.Tensor) else batch["data"]
@@ -51,22 +59,20 @@ class DiffusionModel(pl.LightningModule):
             or (self.mode == "max" and current > self.best_score)
         ):
             self.best_score = current
-            save_dir = self._resolve_save_dir()
 
-            tag = f"best-{self.monitor}={current:.4f}-epoch={self.current_epoch}"
-            ckpt_path = save_dir / f"{tag}.ckpt"
+            tag = f"best-{self.monitor}"
+            ckpt_path = self.save_dir / f"{tag}.ckpt"
             self.trainer.save_checkpoint(ckpt_path)
-            torch.save(self.state_dict(), save_dir / f"{tag}-weights.pt")
+            torch.save(self.state_dict(), self.save_dir / f"{tag}-weights.pt")
+            self._save_cfg(self.save_dir)
 
-            self._save_cfg(save_dir)
-
-            best_ckpt = save_dir / "best.ckpt"
-            try:
-                best_ckpt.unlink(missing_ok=True)
-                best_ckpt.symlink_to(ckpt_path.name)
-            except Exception:
-                import shutil
-                shutil.copyfile(ckpt_path, best_ckpt)
+            # best_ckpt = self.save_dir / "best.ckpt"
+            # try:
+            #     best_ckpt.unlink(missing_ok=True)
+            #     best_ckpt.symlink_to(ckpt_path.name)
+            # except Exception:
+            #     import shutil
+            #     shutil.copyfile(ckpt_path, best_ckpt)
 
             self.log("best_model_improved", 1.0, prog_bar=True)
 
@@ -93,10 +99,26 @@ class DiffusionModel(pl.LightningModule):
     def load_model(self, path):
         self.load_state_dict(torch.load(path, map_location=self.device))
 
+    def _save_cfg(self, save_dir):
+        """Save self.cfg next to checkpoints as YAML (if OmegaConf) or JSON."""
+        import json
+        from pathlib import Path
+        save_dir = Path(save_dir)
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            if hasattr(self, "cfg") and (
+                getattr(self.cfg, "__class__", None).__name__ in {"DictConfig", "ListConfig"}
+                or hasattr(self.cfg, "to_container")
+            ):
+                (save_dir / "config.yaml").write_text(OmegaConf.to_yaml(self.cfg))
+                return
+        except Exception:
+            pass
+
 @ModelRegistry.register("dummy")
 class DummyModel(torch.nn.Module):
     def __init__(self, cfg):
-        breakpoint()
         super().__init__()
         self.layer1 = torch.nn.Conv2d(3, 16, 3, padding=1)
         self.layer2 = torch.nn.Conv2d(16, 3, 3, padding=1)
