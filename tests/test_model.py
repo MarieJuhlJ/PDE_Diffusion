@@ -7,13 +7,13 @@ def test_model_dimensions():
     model = DiffusionModel(OmegaConf.create({
         "experiment": {
         "hyperparameters": {
-            "lr": 1e-3, 
-            "weight_decay": 1e-4, 
-            "batch_size": 32, 
-            "max_epochs": 10, 
+            "lr": 1e-3,
+            "weight_decay": 1e-4,
+            "batch_size": 32,
+            "max_epochs": 10,
             "log_every_n_steps": 10}
-        }, 
-        "dataset": {"name": "mse"}, 
+        },
+        "dataset": {"name": "mse"},
         "scheduler": {
             "name": "ddpm",
             "num_train_timesteps": 10,

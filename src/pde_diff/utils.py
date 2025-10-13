@@ -1,3 +1,9 @@
+import random
+import string
+from types import SimpleNamespace
+
+_ALPHABET = string.ascii_lowercase
+
 class LayerRegistry:
     _registry = {}
 
@@ -45,7 +51,7 @@ class LossRegistry:
         if cfg.name not in cls._registry:
             raise ValueError(f"Unknown loss function: {cfg.name}")
         return cls._registry[cfg.name](cfg)
-    
+
 class SchedulerRegistry:
     _registry = {}
 
@@ -77,3 +83,22 @@ class ModelRegistry:
         if cfg.name not in cls._registry:
             raise ValueError(f"Unknown model: {cfg.name}")
         return cls._registry[cfg.name](cfg)
+
+def unique_id(existing: set[str] | None = None, length: int = 5) -> str:
+    """
+    Return a random A–Z ID of `length` letters that isn't in `existing`.
+    `existing` should be a set of already-issued IDs (optional).
+    """
+    existing = existing or set()
+    while True:
+        uid = ''.join(random.choices(_ALPHABET, k=length))
+        if uid not in existing:
+            return uid
+
+def dict_to_namespace(d):
+    if isinstance(d, dict):
+        return SimpleNamespace(**{k: dict_to_namespace(v) for k, v in d.items()})
+    elif isinstance(d, list):
+        return [dict_to_namespace(v) for v in d]
+    else:
+        return d

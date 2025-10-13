@@ -12,8 +12,16 @@ seed: 42
 loss:
   name: mse
 
-model:
+model: #TODO: Maybe we should merge data and model cfg?
   name: dummy
+  save_best_model: true
+  save_dir: './models'
+  monitor: val_loss
+  mode: min
+  dims:
+    x: 64
+    y: 64
+    z: 2
 
 # Avoid logging to folders
 hydra:

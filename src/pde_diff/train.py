@@ -9,7 +9,6 @@ from omegaconf import DictConfig, OmegaConf
 from sklearn.model_selection import KFold
 import matplotlib.pyplot as plt
 
-
 from pde_diff.utils import DatasetRegistry
 from pde_diff.model import DiffusionModel
 import pde_diff.data
@@ -36,9 +35,7 @@ def train(cfg: DictConfig):
     train_dataloader = DataLoader(dataset_train, batch_size=hp_config.batch_size, shuffle=True, num_workers=4)
     val_dataloader = DataLoader(dataset_val, batch_size=hp_config.batch_size, shuffle=False, num_workers=4)
 
-    checkpoint_callback = pl.pytorch.callbacks.ModelCheckpoint(dirpath="./models", monitor="val_loss", mode="min")
-
-    wandb_name = f"some_name-{cfg.experiment.name}"
+    wandb_name = f"{cfg.experiment.name}"
     wandb_name += f"-{cfg.idx_fold}-of-{cfg.k_folds}-folds" if cfg.get("k_folds", None) else ""
 
     acc = "gpu" if cuda.is_available() else "cpu"
@@ -52,15 +49,11 @@ def train(cfg: DictConfig):
     trainer = pl.Trainer(
         accelerator=acc,
         max_epochs=hp_config.max_epochs,
+        enable_checkpointing=False,
         logger=logger,
-        callbacks=[checkpoint_callback],
         log_every_n_steps=hp_config.log_every_n_steps)
 
     trainer.fit(model, train_dataloader, val_dataloader)
-
-    # Save the final model
-    torch.save(model.state_dict(), f"./models/{wandb_name}-final.ckpt")
-    print(f"Model saved to ./models/{wandb_name}-final.ckpt")
 
 if __name__ == "__main__":
     train()

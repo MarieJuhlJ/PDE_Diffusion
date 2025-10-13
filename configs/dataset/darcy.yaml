@@ -1,0 +1,9 @@
+name: fluid_data
+path: ./data/darcy/
+use_double: False
+data_directories: ['./data/darcy/K_data.csv', './data/darcy/p_data.csv']
+dims:
+  x: 64
+  y: 64
+  z: 2
+train: true

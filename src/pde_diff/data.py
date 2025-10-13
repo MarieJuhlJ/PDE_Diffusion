@@ -1,32 +1,11 @@
 from pathlib import Path
 from torch.utils.data import Dataset
+from einops import rearrange
+import pandas as pd
+import numpy as np
+import torch
 from omegaconf import DictConfig
 from pde_diff.utils import DatasetRegistry
-from torchvision import datasets, transforms
-
-@DatasetRegistry.register("cifar10")
-class CIFAR10(Dataset):
-    def __init__(self, cfg: DictConfig) -> None:
-        super().__init__()
-        self.transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((125.3, 123.0, 113.9), (63.0, 62.1, 66.7))
-        ])
-        self.inverse_transform = transforms.Compose([ transforms.Normalize((0., 0., 0. ),
-                                                     (1/63.0, 1/62.1, 1/66.7)),
-                                transforms.Normalize(( -125.3, -123.0, -113.9 ),
-                                                     (1., 1., 1.)),
-                               ])
-        self.dataset = datasets.CIFAR10(root=cfg.path, train=cfg.train, download=True, transform=self.transform)
-
-    def __len__(self) -> int:
-        """Return the length of the dataset."""
-        return len(self.dataset)
-    
-    def __getitem__(self, idx) -> dict:
-        """Return a given sample from the dataset."""
-        image, _ = self.dataset[idx]
-        return {"data": image}
 
 @DatasetRegistry.register("dataset1")
 class Dataset1(Dataset):
@@ -50,13 +29,56 @@ class Dataset1(Dataset):
         # Implement your preprocessing logic here
         pass
 
-def preprocess(name: str, data_path: Path, output_folder: Path) -> None:
-    print("Preprocessing data...")
-    dataset = DatasetRegistry.create({"name": name, "data_path": data_path})
-    dataset.preprocess(output_folder)
+@DatasetRegistry.register("fluid_data")
+class FluidData(Dataset):
+    def __init__(self, cfg: DictConfig):
+        super().__init__()
+        self.data_paths = list(cfg.data_directories)
+        channels = len(self.data_paths)
 
-def get_train_val_dataset(cfg):
-    train = DatasetRegistry.create(cfg)
-    cfg.update({"train": False})
-    val = DatasetRegistry.create(cfg)
-    return train, val
+        for i in range(channels):
+            if i == 0:
+                self.data = pd.read_csv(self.data_paths[i], header=None)
+            else:
+                self.data = np.stack((self.data, pd.read_csv(self.data_paths[i], header=None)), axis=-1)
+
+        dtype = torch.float64 if cfg.use_double else torch.float32
+        self.data = torch.tensor(self.data, dtype=dtype)
+        self.num_datapoints = len(self.data)
+
+        assert len(self.data.shape) == 3
+        self.data = generalized_b_xy_c_to_image(self.data)
+
+    def normalize(self, arr, min_val, max_val):
+        return (arr - min_val) / (max_val - min_val)
+
+    def unnorm(self, arr, min_val, max_val):
+        return arr * (max_val - min_val) + min_val
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+
+        if index >= self.num_datapoints:
+            raise IndexError('index out of range')
+        return self.data[index]
+
+
+def generalized_b_xy_c_to_image(tensor, pixels_x=None, pixels_y=None):
+    """
+    Transpose the tensor from [batch, pixel_x*pixel_y, channels, ...] to [batch, channels, ..., pixel_x, pixel_y] using einops.
+    """
+    if pixels_x is None or pixels_y is None:
+        pixels_x = pixels_y = int(np.sqrt(tensor.shape[1]))
+    num_dims = len(tensor.shape) - 2
+    pattern = 'b (x y) ' + ' '.join([f'c{i}' for i in range(num_dims)]) + f' -> b ' + ' '.join([f'c{i}' for i in range(num_dims)]) + ' x y'
+    return rearrange(tensor, pattern, x=pixels_x, y=pixels_y)
+
+
+if __name__ == "__main__":
+    data_dirs = ('./data/darcy/K_data.csv', './data/darcy/p_data.csv')
+    dataset = Dataset(data_dirs, use_double=False, return_img=True, gaussian_prior=False)
+    print(f"Dataset length: {len(dataset)}")
+    x, y = dataset[0]
+    print(f"Sample K shape: {x.shape}, Sample p shape: {y.shape}")
