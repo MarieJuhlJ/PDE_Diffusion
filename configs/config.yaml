@@ -1,6 +1,6 @@
 defaults:
   - experiment: exp1
-  - dataset: dataset1
+  - dataset: darcy
   - scheduler: ddpm
   - _self_
 
@@ -10,12 +10,14 @@ idx_fold: null
 seed: 42
 
 loss:
-  name: mse
+  name: darcy
 
-model: #TODO: Maybe we should merge data and model cfg?
-  name: dummy
+model:
+  name: unet2d
   save_best_model: true
   save_dir: './models'
+  id: null
+  x0_pred: 'mean' #['mean', 'sample']
   monitor: val_loss
   mode: min
   dims:

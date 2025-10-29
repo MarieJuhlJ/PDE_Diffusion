@@ -174,7 +174,7 @@ def main():
     start_time = time.time()
 
     # num_processes = int(sys.argv[1])  # optional CLI override
-    n_samples = 500
+    n_samples = 1000
 
     pixels_per_dim = 64
     pixels_at_boundary = True
@@ -232,7 +232,7 @@ def main():
 
     data_K, data_p, data_res, data_seed = zip(*results)
 
-    save_dir = './data/darcy/'
+    save_dir = './data/darcy/train/'
     os.makedirs(save_dir, exist_ok=True)
     pd.DataFrame(data_seed).to_csv(os.path.join(save_dir, 'seeds.csv'), index=False, header=False)
     pd.DataFrame(data_K).to_csv(os.path.join(save_dir, 'K_data.csv'), index=False, header=False)

@@ -3,7 +3,7 @@ import torch
 import lightning as pl
 from diffusers import UNet2DModel
 from omegaconf import OmegaConf
-from pde_diff.utils import SchedulerRegistry, LossRegistry, ModelRegistry, unique_id
+from pde_diff.utils import SchedulerRegistry, LossRegistry, ModelRegistry
 from pathlib import Path
 import pde_diff.scheduler
 import pde_diff.loss
@@ -14,15 +14,17 @@ class DiffusionModel(pl.LightningModule):
         self.model = ModelRegistry.create(cfg.model)
         self.scheduler = SchedulerRegistry.create(cfg.scheduler)
         self.loss_fn = LossRegistry.create(cfg.loss)
+        self.loss_name = cfg.loss
         self.hp_config = cfg.experiment.hyperparameters
         self.data_dims = cfg.dataset.dims
 
+        self.validation_metrics = cfg.dataset.validation_metrics
         self.cfg = cfg
         self.save_model = cfg.model.save_best_model
         self.monitor = cfg.model.monitor
         self.mode = cfg.model.mode
         self.best_score = None
-        self.save_dir = Path(cfg.model.save_dir) / Path(cfg.experiment.name + "-" + unique_id(length=5)) if self.save_model else None
+        self.save_dir = Path(cfg.model.save_dir) / Path(cfg.experiment.name + "-" + cfg.model.id) if cfg.model.id else None
 
     def training_step(self, batch, batch_idx):
         sample = batch if isinstance(batch, torch.Tensor) else batch["data"]
@@ -30,7 +32,9 @@ class DiffusionModel(pl.LightningModule):
         steps = torch.randint(self.scheduler.config.num_train_timesteps, (sample.size(0),), device=self.device)
         noisy_images = self.scheduler.add_noise(sample, noise, steps)
         residual = self.model(noisy_images, steps)
-        loss = self.loss_fn(residual, noise)
+        with torch.no_grad():
+            x0_hat = self.scheduler.reconstruct_x0(noisy_images, residual, steps) if self.loss_name != "mse" else None
+        loss = self.loss_fn(residual, noise, x0_hat, self.scheduler.Sigmas[steps])
         self.log("train_loss", loss, prog_bar=True)
         return loss
 
@@ -40,42 +44,13 @@ class DiffusionModel(pl.LightningModule):
         steps = torch.randint(self.scheduler.config.num_train_timesteps, (sample.size(0),), device=self.device)
         noisy_images = self.scheduler.add_noise(sample, noise, steps)
         residual = self.model(noisy_images, steps)
-        loss = self.loss_fn(residual, noise)
+        with torch.no_grad():
+            x0_hat = self.scheduler.reconstruct_x0(noisy_images, residual, steps) if self.loss_name != "mse" else None
+        mse = torch.nn.functional.mse_loss(residual, noise)
+        loss = self.loss_fn(residual, noise, x0_hat, self.scheduler.Sigmas[steps])
         self.log("val_loss", loss, prog_bar=True)
-        return loss
-
-    def on_validation_epoch_end(self):
-        if not self.save_model or self.trainer.global_rank != 0:
-            return
-
-        metric = self.trainer.callback_metrics.get(self.monitor)
-        if metric is None:
-            return
-
-        current = float(metric.detach().cpu())
-        if (
-            self.best_score is None
-            or (self.mode == "min" and current < self.best_score)
-            or (self.mode == "max" and current > self.best_score)
-        ):
-            self.best_score = current
-
-            tag = f"best-{self.monitor}"
-            ckpt_path = self.save_dir / f"{tag}.ckpt"
-            self.trainer.save_checkpoint(ckpt_path)
-            torch.save(self.state_dict(), self.save_dir / f"{tag}-weights.pt")
-            self._save_cfg(self.save_dir)
-
-            # best_ckpt = self.save_dir / "best.ckpt"
-            # try:
-            #     best_ckpt.unlink(missing_ok=True)
-            #     best_ckpt.symlink_to(ckpt_path.name)
-            # except Exception:
-            #     import shutil
-            #     shutil.copyfile(ckpt_path, best_ckpt)
-
-            self.log("best_model_improved", 1.0, prog_bar=True)
-
+        self.log("val_mse", mse, prog_bar=True)
+        return mse
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.hp_config.lr, weight_decay=self.hp_config.weight_decay)

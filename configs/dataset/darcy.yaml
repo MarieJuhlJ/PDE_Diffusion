@@ -1,7 +1,8 @@
 name: fluid_data
 path: ./data/darcy/
 use_double: False
-data_directories: ['./data/darcy/K_data.csv', './data/darcy/p_data.csv']
+time_series: False
+validation_metrics: ['mse', 'darcy']
 dims:
   x: 64
   y: 64

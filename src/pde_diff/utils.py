@@ -83,10 +83,26 @@ class ModelRegistry:
         if cfg.name not in cls._registry:
             raise ValueError(f"Unknown model: {cfg.name}")
         return cls._registry[cfg.name](cfg)
+    
+class CallbackRegistry:
+    _registry = {}
+
+    @classmethod
+    def register(cls, name):
+        def decorator(callback_cls):
+            cls._registry[name] = callback_cls
+            return callback_cls
+        return decorator
+
+    @classmethod
+    def create(cls, cfg):
+        if cfg.name not in cls._registry:
+            raise ValueError(f"Unknown callback: {cfg.name}")
+        return cls._registry[cfg.name](cfg)
 
 def unique_id(existing: set[str] | None = None, length: int = 5) -> str:
     """
-    Return a random A–Z ID of `length` letters that isn't in `existing`.
+    Return a random a–z ID of `length` letters that isn't in `existing`.
     `existing` should be a set of already-issued IDs (optional).
     """
     existing = existing or set()

@@ -6,14 +6,14 @@ from pde_diff import data
 class PDE_loss(nn.Module):
     def __init__(self, residual_fns, weights=None):
         super().__init__()
-        self.mse = nn.MSELoss()
+        self.mse = MSE(None)
         self.residual_fns = residual_fns
         self.weights = [1.0] * len(residual_fns) if weights is None else weights
 
-    def forward(self, model_output, target):
-        total = self.mse(model_output, target)
+    def forward(self, model_output, target, x0_hat, sigma_t):
+        total = self.mse(model_output, target, x0_hat)
         for fn, w in zip(self.residual_fns, self.weights):
-            r = fn(model_output)
+            r = fn(x0_hat, sigma_t)
             total = total + w * r
         return total
 
@@ -22,14 +22,15 @@ class MSE(nn.Module):
     def __init__(self, cfg):
         super().__init__()
 
-    def forward(self, model_output, target):
+    def forward(self, model_output, target, x0_hat):
         return nn.functional.mse_loss(model_output, target)
 
-@LossRegistry.register("darcy_flow")
+@LossRegistry.register("darcy")
 class DarcyLoss(PDE_loss):
     def __init__(self, cfg):
         residual_fns = [self.darcy_residual_loss]
         weights = [1.0]
+        self.c = 10e-3
         super().__init__(residual_fns, weights)
 
     def darcy_source(self, H, W, r=10.0, w_frac=0.125, device=None, dtype=None):
@@ -42,7 +43,8 @@ class DarcyLoss(PDE_loss):
     def darcy_residual_F(self, x):
         B, C, H, W = x.shape
         assert C == 2 and H == W
-        dx = 1.0 / (H - 1)
+        # dx = 1.0 / (H - 1)
+        dx = 1.0
         device, dtype = x.device, x.dtype
 
         K, p = x[:, 0], x[:, 1]
@@ -61,13 +63,11 @@ class DarcyLoss(PDE_loss):
         f = self.darcy_source(H, W, r=10.0, w_frac=0.125, device=device, dtype=dtype).unsqueeze(0).expand(B, -1, -1)
         return div_K_grad_p + f
 
-    def darcy_residual_loss(self, x, sigma_bar=None):
+    def darcy_residual_loss(self, x, sigma_t):
+        sigma_bar = sigma_t / self.c
         F = self.darcy_residual_F(x)
-        mse = (F**2).mean(dim=(1,2))
-        return (mse if sigma_bar is None else mse/(2.0*sigma_bar)).mean()
-
-
-
+        mse = (F**2).mean(dim=(1,2)) * (1 / 2 * sigma_bar)
+        return mse.mean()
 
 if __name__ == "__main__":
     from types import SimpleNamespace

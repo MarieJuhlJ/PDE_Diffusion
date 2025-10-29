@@ -31,9 +31,9 @@ class Dataset1(Dataset):
 
 @DatasetRegistry.register("fluid_data")
 class FluidData(Dataset):
-    def __init__(self, cfg: DictConfig):
+    def __init__(self, cfg: DictConfig) -> None:
         super().__init__()
-        self.data_paths = list(cfg.data_directories)
+        self.data_paths = [Path(cfg.path) / 'K_data.csv', Path(cfg.path) / 'p_data.csv']
         channels = len(self.data_paths)
 
         for i in range(channels):
@@ -77,8 +77,8 @@ def generalized_b_xy_c_to_image(tensor, pixels_x=None, pixels_y=None):
 
 
 if __name__ == "__main__":
-    data_dirs = ('./data/darcy/K_data.csv', './data/darcy/p_data.csv')
-    dataset = Dataset(data_dirs, use_double=False, return_img=True, gaussian_prior=False)
+    data_path = './data/darcy/'
+    dataset = Dataset(data_path, use_double=False, return_img=True, gaussian_prior=False)
     print(f"Dataset length: {len(dataset)}")
     x, y = dataset[0]
     print(f"Sample K shape: {x.shape}, Sample p shape: {y.shape}")
