@@ -4,7 +4,9 @@
 3. Copy the api url and key from this page: https://cds.climate.copernicus.eu/how-to-api
 4. Create a file called ".cdsapirc" containing the url and key in ones home/user folder. The file should look like this:
 """
+import os
 import cdsapi
+import xarray as xr
 
 dataset = "reanalysis-era5-pressure-levels"
 request = {
@@ -27,10 +29,18 @@ request = {
         "18:00", "19:00", "20:00",
         "21:00", "22:00", "23:00"
     ],
-    "pressure_level": ["500"],
+    "pressure_level": ["500","550"],
     "data_format": "grib",
-    "download_format": "unarchived"
+    #"download_format": "unarchived"
 }
 
+grib_file = "./data/era5/era5.grib"
+os.makedirs(os.path.dirname(grib_file), exist_ok=True)
+
 client = cdsapi.Client()
-client.retrieve(dataset, request).download()
+client.retrieve(dataset, request).download(grib_file)
+print(f"Downloaded ERA5 data to {grib_file}")
+
+ds = xr.open_dataset(grib_file, engine='cfgrib')
+ds.to_zarr('./data/era5/zarr',mode="w")
+print("Converted GRIB file to Zarr format at data/era5/zarr")
