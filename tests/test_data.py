@@ -1,7 +1,7 @@
 
 def test_data_normalization():
     from omegaconf import OmegaConf
-    from src.pde_diff.data import CIFAR10
+    from pde_diff.data.datasets import CIFAR10
     from torchvision import transforms
     import torch
 
