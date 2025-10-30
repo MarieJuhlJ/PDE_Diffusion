@@ -1,4 +1,4 @@
-from pde_diff import data
+from pde_diff.data import datasets
 import torch
 import lightning as pl
 from diffusers import UNet2DModel
