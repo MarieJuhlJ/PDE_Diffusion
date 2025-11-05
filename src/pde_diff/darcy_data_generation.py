@@ -174,7 +174,7 @@ def main():
     start_time = time.time()
 
     # num_processes = int(sys.argv[1])  # optional CLI override
-    n_samples = 1000
+    n_samples = 3000
 
     pixels_per_dim = 64
     pixels_at_boundary = True

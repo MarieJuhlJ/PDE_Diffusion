@@ -1,6 +1,6 @@
 #!/bin/sh 
 #BSUB -q gpuv100
-#BSUB -J data_gen
+#BSUB -J only_mse
 #BSUB -n 4
 #BSUB -gpu "num=1:mode=exclusive_process"
 #BSUB -W 24:00
@@ -14,4 +14,4 @@
 . /work3/s194572/miniconda3/etc/profile.d/conda.sh
 conda activate pde_diff
 
-python src/pde_diff/train.py
+python src/pde_diff/train.py experiment.hyperparameters.max_epochs=200

@@ -10,7 +10,7 @@ from sklearn.model_selection import KFold
 
 from pde_diff.utils import DatasetRegistry, unique_id
 from pde_diff.model import DiffusionModel
-from pde_diff.callbacks import DarcyLogger
+from pde_diff.callbacks import DarcyLogger, SaveBestModel
 import pde_diff.callbacks
 import pde_diff.data
 
@@ -53,7 +53,7 @@ def train(cfg: DictConfig):
         logger = pl.pytorch.loggers.CSVLogger("logs", name=wandb_name)
 
     darcy_logger = DarcyLogger()
-    save_best_model = pde_diff.callbacks.SaveBestModel()
+    save_best_model = SaveBestModel()
 
     trainer = pl.Trainer(
         accelerator=acc,
@@ -64,8 +64,9 @@ def train(cfg: DictConfig):
         callbacks=[save_best_model, darcy_logger],
     )
 
-    print(f"Starting training of moldel {cfg.model.id} for {hp_config.max_epochs} epochs")
+    print(f"Starting training of model {cfg.model.id} for {hp_config.max_epochs} epochs")
     trainer.fit(model, train_dataloader, val_dataloader)
+    print(f"Training completed of model {cfg.model.id}")
 
 if __name__ == "__main__":
     train()
