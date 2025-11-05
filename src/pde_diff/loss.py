@@ -1,7 +1,7 @@
 import torch.nn as nn
 import torch
 from pde_diff.utils import LossRegistry, DatasetRegistry
-from pde_diff import data
+from pde_diff.data import datasets
 
 class PDE_loss(nn.Module):
     def __init__(self, residual_fns, weights=None):
@@ -22,7 +22,7 @@ class MSE(nn.Module):
     def __init__(self, cfg):
         super().__init__()
 
-    def forward(self, model_output, target, x0_hat):
+    def forward(self, model_output, target, x0_hat, sigma_t=None):
         return nn.functional.mse_loss(model_output, target)
 
 @LossRegistry.register("darcy")
