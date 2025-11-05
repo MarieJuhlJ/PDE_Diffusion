@@ -3,7 +3,6 @@ import hydra
 import torch
 
 import lightning as pl
-import torch.cuda as cuda
 from torch.utils.data import DataLoader, Subset
 from omegaconf import DictConfig, OmegaConf
 from sklearn.model_selection import KFold
@@ -12,7 +11,7 @@ from pde_diff.utils import DatasetRegistry, unique_id
 from pde_diff.model import DiffusionModel
 from pde_diff.callbacks import DarcyLogger
 import pde_diff.callbacks
-import pde_diff.data
+import pde_diff.data.datasets
 
 @hydra.main(version_base=None, config_name="config.yaml", config_path="../../configs")
 def train(cfg: DictConfig):
@@ -34,7 +33,8 @@ def train(cfg: DictConfig):
         val_size = int(len(dataset) * 0.1)
         train_size = len(dataset) - val_size
         if cfg.dataset.time_series:
-            dataset_train, dataset_val = dataset[:train_size], dataset[train_size:]
+            dataset_train = Subset(dataset, range(train_size))
+            dataset_val = Subset(dataset, range(train_size, len(dataset)))
         else:
             dataset_train, dataset_val = torch.utils.data.random_split(dataset, [train_size, val_size])
 
@@ -44,7 +44,7 @@ def train(cfg: DictConfig):
     wandb_name = f"{cfg.experiment.name}-{cfg.model.id}"
     wandb_name += f"-{cfg.idx_fold}-of-{cfg.k_folds}-folds" if cfg.get("k_folds", None) else ""
 
-    acc = "gpu" if cuda.is_available() else "cpu"
+    acc = "gpu" if torch.cuda.is_available() else "cpu"
 
     if cfg.wandb:
         logger = pl.pytorch.loggers.WandbLogger(name=wandb_name, entity="franka-ppo", project="pde-diff", config=OmegaConf.to_container(cfg.experiment, resolve=True))
@@ -64,7 +64,8 @@ def train(cfg: DictConfig):
         callbacks=[save_best_model, darcy_logger],
     )
 
-    print(f"Starting training of moldel {cfg.model.id} for {hp_config.max_epochs} epochs")
+    print(f"Starting training of model {cfg.model.id} for {hp_config.max_epochs} epochs")
+    #model.training_step(next(iter(train_dataloader)), 0)  # Test run of training step
     trainer.fit(model, train_dataloader, val_dataloader)
 
 if __name__ == "__main__":
