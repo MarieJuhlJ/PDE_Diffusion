@@ -1,23 +1,32 @@
-from pde_diff import data
 import torch
+import numpy as np
 import lightning as pl
 from diffusers import UNet2DModel
 from omegaconf import OmegaConf
-from pde_diff.utils import SchedulerRegistry, LossRegistry, ModelRegistry
 from pathlib import Path
+
+from pde_diff.data.datasets import increment_clock_features
+
+# Imports for registries
+from pde_diff.utils import SchedulerRegistry, LossRegistry, ModelRegistry
 import pde_diff.scheduler
 import pde_diff.loss
+from pde_diff.data import datasets
+
 
 class DiffusionModel(pl.LightningModule):
     def __init__(self, cfg):
         super().__init__()
-        self.model = ModelRegistry.create(cfg.model)
+        # combine model and dataset config
+        model_cfg = OmegaConf.merge(cfg.model, OmegaConf.create({"dims": cfg.dataset.dims}))
+        self.model = ModelRegistry.create(model_cfg)
         self.scheduler = SchedulerRegistry.create(cfg.scheduler)
         self.loss_fn = LossRegistry.create(cfg.loss)
         self.loss_name = cfg.loss
         self.hp_config = cfg.experiment.hyperparameters
         self.data_dims = cfg.dataset.dims
 
+        self.conditional = cfg.dataset.time_series # Add conditional flag
         self.validation_metrics = cfg.dataset.validation_metrics
         self.cfg = cfg
         self.save_model = cfg.model.save_best_model
@@ -27,31 +36,45 @@ class DiffusionModel(pl.LightningModule):
         self.save_dir = Path(cfg.model.save_dir) / Path(cfg.experiment.name + "-" + cfg.model.id) if cfg.model.id else None
 
     def training_step(self, batch, batch_idx):
-        sample = batch if isinstance(batch, torch.Tensor) else batch["data"]
-        noise = torch.randn_like(sample)
-        T = self.scheduler.config.num_train_timesteps
-        steps = torch.randint(0, T, (sample.size(0),), device=self.device)
-        noisy_images = self.scheduler.add_noise(sample, noise, steps)
+        if self.conditional:
+            # Apply conditional logic here
+            conditional, state = batch
+        else:
+            state = batch
+
+        noise = torch.randn_like(state)
+        steps = torch.randint(self.scheduler.config.num_train_timesteps, (state.size(0),), device=self.device)
+        noisy_images = self.scheduler.add_noise(state, noise, steps)
+
+        if self.conditional:
+            noisy_images = torch.cat([conditional, noisy_images], dim=1)
+
         model_out = self.model(noisy_images, steps)
         variance = self.scheduler.posterior_variance[steps]
         self.loss_fn.c_data = self.scheduler.p2_loss_weight[steps] #https://arxiv.org/pdf/2303.09556.pdf
-        loss = self.loss_fn(model_out=model_out, target=sample, x0_hat=sample, var=variance)
+        loss = self.loss_fn(model_out=model_out, target=model_out, x0_hat=model_out, var=variance)
         self.log("train_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        sample = batch if isinstance(batch, torch.Tensor) else batch["data"]
-        noise = torch.randn_like(sample)
-        T = self.scheduler.config.num_train_timesteps
-        steps = torch.randint(0, T, (sample.size(0),), device=self.device)
-        noisy_images = self.scheduler.add_noise(sample, noise, steps)
+        if self.conditional:
+            conditional, target = batch
+        else:
+            target = batch
+        noise = torch.randn_like(target)
+        steps = torch.randint(self.scheduler.config.num_train_timesteps, (target.size(0),), device=self.device)
+        noisy_images = self.scheduler.add_noise(target, noise, steps)
+
+        if self.conditional:
+            noisy_images = torch.cat([conditional, noisy_images], dim=1)
+
         model_out = self.model(noisy_images, steps)
         variance = self.scheduler.posterior_variance[steps]
         self.loss_fn.c_data = self.scheduler.p2_loss_weight[steps]
-        loss = self.loss_fn(model_out=model_out, target=sample, x0_hat=sample, var=variance)
-        mse = (self.mse(model_out, sample) * self.scheduler.p2_loss_weight[steps][:, None, None, None]).mean()
-        self.log("val_loss", loss, prog_bar=True, on_step=False, on_epoch=True, batch_size=sample.size(0))
-        self.log("val_mse_(weighted)",  mse,  prog_bar=True, on_step=False, on_epoch=True, batch_size=sample.size(0))
+        loss = self.loss_fn(model_out=model_out, target=model_out, x0_hat=model_out, var=variance)
+        mse = (self.mse(model_out, model_out) * self.scheduler.p2_loss_weight[steps][:, None, None, None]).mean()
+        self.log("val_loss", loss, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
+        self.log("val_mse_(weighted)",  mse,  prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
         return mse
 
     def configure_optimizers(self):
@@ -72,11 +95,32 @@ class DiffusionModel(pl.LightningModule):
             samples = mean + self.scheduler.sigmas[t] * z
         return samples
 
-    def sample_loop(self, batch_size=1):
-        samples = torch.randn((batch_size,int(self.data_dims.z), int(self.data_dims.x), int(self.data_dims.y)), device=self.device)
+    def sample_loop(self, batch_size=1, conditionals=None):
+        samples = torch.randn((batch_size,int(self.data_dims.output_dims), int(self.data_dims.x), int(self.data_dims.y)), device=self.device)
         for t in reversed(range(self.scheduler.config.num_train_timesteps)):
+            if self.conditional and conditionals is not None:
+                samples = torch.cat([conditionals, samples], dim=1)
             samples = self.forward(samples, t)
         return samples
+
+    def forecast(self, initial_condition, steps):
+        self.model.eval()
+        current_state = initial_condition.to(self.device)
+        forecasted_states = [current_state.cpu()]
+
+        for step in range(steps):
+            with torch.no_grad():
+                prediction = self.sample_loop(batch_size=current_state.size(0), conditionals=current_state)
+                next_state = current_state[:,:,:,-(self.data_dims.input_dims-self.data_dims.output_dims)//2:]
+                next_state[:, :, :, :self.data_dims.output_dims] += prediction
+                # Update next_state with time information:
+                next_state[:, :, :, -4:] = increment_clock_features(
+                    next_state[:, :, :, -4:], step_size=self.cfg.dataset.time_step
+                ).to(self.device)
+                current_state = torch.cat([current_state[:,-(self.data_dims.input_dims-self.data_dims.output_dims)//2:,:,:], next_state], dim=1)
+            forecasted_states.append(current_state.cpu())
+
+        return torch.stack(forecasted_states, dim=1)
 
     def ddim_forward(self, samples, t, t_prev): #this assumes model predicts epsilon
         z = torch.randn_like(samples) if t_prev > 0 else 0
@@ -121,8 +165,6 @@ class DiffusionModel(pl.LightningModule):
                         x.index_copy_(0, sel, x_sel)
         return x
 
-
-
     def load_model(self, path):
         self.load_state_dict(torch.load(path, map_location=self.device))
 
@@ -159,8 +201,8 @@ class DummyModel(torch.nn.Module):
 class UNet2DWrapper(torch.nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        in_channels = int(cfg.dims.z)
-        out_channels = int(cfg.dims.z)
+        in_channels = int(cfg.dims.input_dims)
+        out_channels = int(cfg.dims.output_dims)
         self.unet = UNet2DModel(
             sample_size=int(cfg.dims.x),
             in_channels=in_channels,

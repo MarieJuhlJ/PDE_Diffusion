@@ -1,0 +1,25 @@
+name: era5
+path: ./data/era5/zarr/
+use_double: False
+time_series: True
+validation_metrics: ['mse', 'era5_vorticity']
+dims:
+  x: 1440
+  y: 721
+  z: 26
+  input_dims: 26
+  output_dims: 6
+train: true
+atmospheric_features:
+  - 'u'
+  - 'v'
+  - 'vo'
+
+single_features: []
+static_features: []
+max_year: 2024
+time_step: 2
+
+"lon_range": null # [0, 50]
+"lat_range": [70, 50]
+"downsample_factor": 4

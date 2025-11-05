@@ -104,7 +104,7 @@ Note that windows users have to manually run the following commands:
 ### For developers:
 There are extra packages you need if you want to make changes to the project. You can install them using the `requirements_dev.txt` by invoking the task `dev_requirements"`:
 
-```invoke dev_requirements```
+```invoke dev-requirements```
 
 or installing `requirements_dev.txt` directly with pip:
 
