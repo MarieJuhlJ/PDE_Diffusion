@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 import lightning as pl
-from diffusers import UNet2DModel
+from diffusers import UNet2DModel, UNet2DConditionModel
 from omegaconf import OmegaConf
 from pathlib import Path
 
@@ -33,27 +33,29 @@ class DiffusionModel(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         if self.conditional:
             # Apply conditional logic here
-            conditional, target = batch
+            conditionals, state = batch
         else:
-            target = batch
+            state = batch
 
-        noise = torch.randn_like(target)
-        steps = torch.randint(self.scheduler.config.num_train_timesteps, (target.size(0),), device=self.device)
-        noisy_images = self.scheduler.add_noise(target, noise, steps)
+        noise = torch.randn_like(state)
+        steps = torch.randint(self.scheduler.config.num_train_timesteps, (state.size(0),), device=self.device)
+        noisy_images = self.scheduler.add_noise(state, noise, steps)
 
         if self.conditional:
-            noisy_images = torch.cat([conditional, noisy_images], dim=1)
+            noisy_images = torch.cat([conditionals, noisy_images], dim=1)
 
         model_out = self.model(noisy_images, steps)
         variance = self.scheduler.posterior_variance[steps]
         self.loss_fn.c_data = self.scheduler.p2_loss_weight[steps] #https://arxiv.org/pdf/2303.09556.pdf
-        loss = self.loss_fn(model_out=model_out, target=target, x0_hat=model_out, var=variance)
+        if self.conditional:
+                x_t = conditionals[:,conditionals.shape[1]//2:,:,:][:,:(noisy_images.shape[1]-conditionals.shape[1]),:,:] # what is this?
+        loss = self.loss_fn(model_out=model_out, target=state, x0_hat=model_out, var=variance)
         self.log("train_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
         if self.conditional:
-            conditional, target = batch
+            conditionals, target = batch
         else:
             target = batch
         noise = torch.randn_like(target)
@@ -61,7 +63,7 @@ class DiffusionModel(pl.LightningModule):
         noisy_images = self.scheduler.add_noise(target, noise, steps)
 
         if self.conditional:
-            noisy_images = torch.cat([conditional, noisy_images], dim=1)
+            noisy_images = torch.cat([conditionals, noisy_images], dim=1)
 
         model_out = self.model(noisy_images, steps)
         variance = self.scheduler.posterior_variance[steps]
@@ -237,6 +239,42 @@ class UNet2DWrapper(torch.nn.Module):
 
     def forward(self, x, t):
         return self.unet(sample=x, timestep=t).sample
+
+@ModelRegistry.register("unet2d_conditional")
+class UNet2DConditionalWrapper(torch.nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.in_channels = int(cfg.dims.input_dims)
+        self.out_channels = int(cfg.dims.output_dims)
+        self.unet = UNet2DConditionModel(
+            sample_size=(int(cfg.dims.x), int(cfg.dims.y)),
+            in_channels=self.out_channels,
+            out_channels=self.out_channels,
+            layers_per_block=2,
+            block_out_channels=(64, 128, 256, 512),
+            down_block_types=(
+                "DownBlock2D",
+                "DownBlock2D",
+                "AttnDownBlock2D",
+                "DownBlock2D",
+            ),
+            up_block_types=(
+                "UpBlock2D",
+                "AttnUpBlock2D",
+                "UpBlock2D",
+                "UpBlock2D",
+            ),
+            cross_attention_dim=self.in_channels - self.out_channels,  # Assuming half of input channels are for conditioning
+        )
+
+    def forward(self, x, t):
+        # Split x into conditionals and actual input
+        cond_channels = self.in_channels - self.out_channels
+        conditionals = x[:, :cond_channels, :, :]
+        batch_size, cond_channels, height, width = conditionals.shape
+        conditionals = conditionals.view(batch_size, cond_channels, height * width).permute(0, 2, 1)
+        inputs = x[:, cond_channels:, :, :]
+        return self.unet(sample=inputs, timestep=t, encoder_hidden_states=conditionals).sample
 
 if __name__ == "__main__":
     pass
