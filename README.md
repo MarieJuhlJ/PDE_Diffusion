@@ -8,6 +8,7 @@ To train the model on the **Darcy dataset**, run:
 
 ```bash
 python src/pde_diff/train.py dataset=darcy loss.name=darcy
+```
 
 ## Project structure
 
