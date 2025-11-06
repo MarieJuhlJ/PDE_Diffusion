@@ -475,8 +475,8 @@ if __name__ == "__main__":
         "static_features": [],
         "max_year": 2024,
         "time_step": 1,
-        "lat_range": [70, 50],  # For subsetting
-        "downsample_factor": 4  # For downsampling
+        "lat_range": [70, 46],  # For subsetting
+        "downsample_factor": 3  # For downsampling
     })
     ERA5_dataset = ERA5Dataset(cfg=cfg)
     ERA5_dataset_len = len(ERA5_dataset)

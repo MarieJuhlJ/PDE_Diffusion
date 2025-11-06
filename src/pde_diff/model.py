@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 import lightning as pl
-from diffusers import UNet2DModel
+from diffusers import UNet2DModel, UNet2DConditionModel
 from omegaconf import OmegaConf
 from pathlib import Path
 
@@ -39,7 +39,7 @@ class DiffusionModel(pl.LightningModule):
 
         if self.conditional:
             # Apply conditional logic here
-            conditional, state = batch
+            conditionals, state = batch
         else:
             state = batch
 
@@ -48,18 +48,22 @@ class DiffusionModel(pl.LightningModule):
         noisy_images = self.scheduler.add_noise(state, noise, steps)
 
         if self.conditional:
-            noisy_images = torch.cat([conditional, noisy_images], dim=1)
+            noisy_images = torch.cat([conditionals, noisy_images], dim=1)
 
         residual = self.model(noisy_images, steps)
         with torch.no_grad():
-            x0_hat = self.scheduler.reconstruct_x0(noisy_images, residual, steps) if self.loss_name != "mse" else None
+            if self.conditional:
+                x_t = conditionals[:,conditionals.shape[1]//2:,:,:][:,:(noisy_images.shape[1]-conditionals.shape[1]),:,:]
+            else:
+                x_t = noisy_images
+            x0_hat = self.scheduler.reconstruct_x0(x_t, residual, steps) if self.loss_name != "mse" else None
         loss = self.loss_fn(residual, noise, x0_hat, self.scheduler.Sigmas[steps])
         self.log("train_loss", loss, prog_bar=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
         if self.conditional:
-            conditional, target = batch
+            conditionals, target = batch
         else:
             target = batch
 
@@ -68,11 +72,15 @@ class DiffusionModel(pl.LightningModule):
         noisy_images = self.scheduler.add_noise(target, noise, steps)
 
         if self.conditional:
-            noisy_images = torch.cat([conditional, noisy_images], dim=1)
+            noisy_images = torch.cat([conditionals, noisy_images], dim=1)
 
         residual = self.model(noisy_images, steps)
         with torch.no_grad():
-            x0_hat = self.scheduler.reconstruct_x0(conditional[:,conditional.shape(1)//2:,:,:], residual, steps) if self.loss_name != "mse" else None
+            if self.conditional:
+                x_t = conditionals[:,conditionals.shape[1]//2:,:,:][:,:(noisy_images.shape[1]-conditionals.shape[1]),:,:]
+            else:
+                x_t = noisy_images
+            x0_hat = self.scheduler.reconstruct_x0(x_t, residual, steps) if self.loss_name != "mse" else None
         mse = torch.nn.functional.mse_loss(residual, noise)
         loss = self.loss_fn(residual, noise, x0_hat, self.scheduler.Sigmas[steps])
         self.log("val_loss", loss, prog_bar=True)
@@ -87,9 +95,10 @@ class DiffusionModel(pl.LightningModule):
     def forward(self, samples, t):
         self.model.eval()
         with torch.no_grad():
-            z = torch.randn_like(samples) if t > 0 else 0
             t_batch =torch.tensor([t]*samples.size(0), device=self.device)
-            samples = self.scheduler.sample(self.model(samples, t_batch), t_batch, samples) + self.scheduler.sigmas[t] * z
+            samples = self.scheduler.sample(self.model(samples, t_batch), t_batch, samples)
+            z = torch.randn_like(samples) if t > 0 else 0
+            samples += self.scheduler.sigmas[t] * z
         return samples
 
     def sample_loop(self, batch_size=1, conditionals=None):
@@ -179,6 +188,42 @@ class UNet2DWrapper(torch.nn.Module):
 
     def forward(self, x, t):
         return self.unet(sample=x, timestep=t).sample
+
+@ModelRegistry.register("unet2d_conditional")
+class UNet2DConditionalWrapper(torch.nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.in_channels = int(cfg.dims.input_dims)
+        self.out_channels = int(cfg.dims.output_dims)
+        self.unet = UNet2DConditionModel(
+            sample_size=(int(cfg.dims.x), int(cfg.dims.y)),
+            in_channels=self.out_channels,
+            out_channels=self.out_channels,
+            layers_per_block=2,
+            block_out_channels=(64, 128, 256, 512),
+            down_block_types=(
+                "DownBlock2D",
+                "DownBlock2D",
+                "AttnDownBlock2D",
+                "DownBlock2D",
+            ),
+            up_block_types=(
+                "UpBlock2D",
+                "AttnUpBlock2D",
+                "UpBlock2D",
+                "UpBlock2D",
+            ),
+            cross_attention_dim=self.in_channels - self.out_channels,  # Assuming half of input channels are for conditioning
+        )
+
+    def forward(self, x, t):
+        # Split x into conditionals and actual input
+        cond_channels = self.in_channels - self.out_channels
+        conditionals = x[:, :cond_channels, :, :]
+        batch_size, cond_channels, height, width = conditionals.shape
+        conditionals = conditionals.view(batch_size, cond_channels, height * width).permute(0, 2, 1)
+        inputs = x[:, cond_channels:, :, :]
+        return self.unet(sample=inputs, timestep=t, encoder_hidden_states=conditionals).sample
 
 if __name__ == "__main__":
     pass

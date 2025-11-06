@@ -33,13 +33,14 @@ def train(cfg: DictConfig):
         val_size = int(len(dataset) * 0.1)
         train_size = len(dataset) - val_size
         if cfg.dataset.time_series:
-            dataset_train = Subset(dataset, range(train_size))
-            dataset_val = Subset(dataset, range(train_size, len(dataset)))
+            # Offset the train and validation set by one to avoid data leakage in time series datasets (each item contains 3 timesteps)
+            dataset_train = Subset(dataset, range(train_size-1))
+            dataset_val = Subset(dataset, range(train_size+1, len(dataset)))
         else:
             dataset_train, dataset_val = torch.utils.data.random_split(dataset, [train_size, val_size])
 
-    train_dataloader = DataLoader(dataset_train, batch_size=hp_config.batch_size, shuffle=True, num_workers=4)
-    val_dataloader = DataLoader(dataset_val, batch_size=hp_config.batch_size, shuffle=False, num_workers=4)
+    train_dataloader = DataLoader(dataset_train, batch_size=hp_config.batch_size, shuffle=True, num_workers=4,persistent_workers=True)
+    val_dataloader = DataLoader(dataset_val, batch_size=hp_config.batch_size, shuffle=False, num_workers=4,persistent_workers=True)
 
     wandb_name = f"{cfg.experiment.name}-{cfg.model.id}"
     wandb_name += f"-{cfg.idx_fold}-of-{cfg.k_folds}-folds" if cfg.get("k_folds", None) else ""
@@ -52,7 +53,8 @@ def train(cfg: DictConfig):
         os.makedirs("logs", exist_ok=True)
         logger = pl.pytorch.loggers.CSVLogger("logs", name=wandb_name)
 
-    darcy_logger = DarcyLogger()
+    if cfg.dataset.name=="darcy":
+        darcy_logger = DarcyLogger()
     save_best_model = pde_diff.callbacks.SaveBestModel()
 
     trainer = pl.Trainer(
@@ -61,7 +63,7 @@ def train(cfg: DictConfig):
         enable_checkpointing=False,
         logger=logger,
         log_every_n_steps=hp_config.log_every_n_steps,
-        callbacks=[save_best_model, darcy_logger],
+        callbacks=[save_best_model, darcy_logger] if cfg.dataset.name=="darcy" else [save_best_model],
     )
 
     print(f"Starting training of model {cfg.model.id} for {hp_config.max_epochs} epochs")
