@@ -128,7 +128,6 @@ class ERA5Dataset(Dataset):
         # Subset longitude and latitude
         lon_range = cfg.get("lon_range", None)  # Example: [0, 50]
         lat_range = cfg.get("lat_range", None)  # Example: [-50, 0]
-        print(lon_range)
 
         if lon_range:
             self.data = self.data.sel(longitude=slice(*lon_range))
@@ -156,7 +155,8 @@ class ERA5Dataset(Dataset):
         self.single_features = list(cfg.single_features)
         self.static_features = list(cfg.static_features)
 
-        self.means, self.stds, self.diff_means, self.diff_stds = self._init_means_and_stds()
+        if cfg.get("normalize", True):
+            self.means, self.stds, self.diff_means, self.diff_stds = self._init_means_and_stds()
 
 
     def _init_means_and_stds(self):
@@ -276,7 +276,10 @@ class ERA5Dataset(Dataset):
 
 
         # Normalize inputs
-        inputs_norm = self._normalize(raw_inputs, self.means, self.stds)
+        if cfg.get("normalize", True):
+            inputs_norm = self._normalize(raw_inputs, self.means, self.stds)
+        else:
+            inputs_norm = raw_inputs
 
         # Add time features
         clock_features = self._generate_clock_features(ds_conditionals)
