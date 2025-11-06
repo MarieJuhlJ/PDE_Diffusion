@@ -14,14 +14,14 @@ class PDE_loss(nn.Module):
         self.c_data = None
         self.c_residuals = [1e-3 for _ in residual_fns]
 
-    def forward(self, model_output, target, **kwargs):
+    def forward(self, model_out, target, **kwargs):
         x0_hat = kwargs.get('x0_hat', None)
         var = kwargs.get('var', None)
 
         if self.c_data is None:
-            total = self.mse(model_output, target).mean()
+            total = self.mse(model_out, target).mean()
         else:
-            total = (self.mse(model_output, target) * self.c_data[:, None, None, None]).mean()
+            total = (self.mse(model_out, target) * self.c_data[:, None, None, None]).mean()
         for fn, w in zip(self.residual_fns, self.c_residuals):
             r = fn(x0_hat, var)
             total += + w * r
@@ -34,11 +34,11 @@ class MSE(nn.Module):
         self.mse = nn.MSELoss(reduction='none')
         super().__init__()
 
-    def forward(self, model_output, target, **kwargs):
+    def forward(self, model_out, target, **kwargs):
         if self.c_data is None:
-            return self.mse(model_output, target).mean()
+            return self.mse(model_out, target).mean()
         else:
-            return (self.mse(model_output, target) * self.c_data[:, None, None, None]).mean()
+            return (self.mse(model_out, target) * self.c_data[:, None, None, None]).mean()
 
 @LossRegistry.register("darcy")
 class DarcyLoss(PDE_loss):

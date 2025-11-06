@@ -7,18 +7,19 @@ from torch.utils.data import DataLoader, Subset
 from omegaconf import DictConfig, OmegaConf
 from sklearn.model_selection import KFold
 
-from pde_diff.utils import DatasetRegistry, unique_id
+from pde_diff.utils import DatasetRegistry, CallbackRegistry, unique_id
 from pde_diff.model import DiffusionModel
-from pde_diff.callbacks import DarcyLogger, SaveBestModel
+from pde_diff.callbacks import SaveBestModel
 import pde_diff.callbacks
 import pde_diff.data.datasets
 
 @hydra.main(version_base=None, config_name="config.yaml", config_path="../../configs")
 def train(cfg: DictConfig):
     hp_config =cfg.experiment.hyperparameters
-    cfg.model.id = unique_id(length=5) if cfg.model.id == None else cfg.model.id
-    model = DiffusionModel(cfg)
+    cfg.id = unique_id(length=5) if cfg.id == None else cfg.id
+    cfg.model.dims = cfg.dataset.dims
 
+    model = DiffusionModel(cfg)
     dataset = DatasetRegistry.create(cfg.dataset)
 
     if cfg.get("k_folds", None):
@@ -41,7 +42,7 @@ def train(cfg: DictConfig):
     train_dataloader = DataLoader(dataset_train, batch_size=hp_config.batch_size, shuffle=True, num_workers=4)
     val_dataloader = DataLoader(dataset_val, batch_size=hp_config.batch_size, shuffle=False, num_workers=4)
 
-    wandb_name = f"{cfg.experiment.name}-{cfg.model.id}"
+    wandb_name = f"{cfg.experiment.name}-{cfg.id}"
     wandb_name += f"-{cfg.idx_fold}-of-{cfg.k_folds}-folds" if cfg.get("k_folds", None) else ""
 
     acc = "gpu" if torch.cuda.is_available() else "cpu"
@@ -52,8 +53,6 @@ def train(cfg: DictConfig):
         os.makedirs("logs", exist_ok=True)
         logger = pl.pytorch.loggers.CSVLogger("logs", name=wandb_name)
 
-    darcy_logger = DarcyLogger()
-    save_best_model = SaveBestModel()
 
     trainer = pl.Trainer(
         accelerator=acc,
@@ -61,13 +60,12 @@ def train(cfg: DictConfig):
         enable_checkpointing=False,
         logger=logger,
         log_every_n_steps=hp_config.log_every_n_steps,
-        callbacks=[save_best_model, darcy_logger],
+        callbacks=[SaveBestModel()]
     )
 
-    print(f"Starting training of model {cfg.model.id} for {hp_config.max_epochs} epochs")
     #model.training_step(next(iter(train_dataloader)), 0)  # Test run of training step
     trainer.fit(model, train_dataloader, val_dataloader)
-    print(f"Training completed of model {cfg.model.id}")
+    print(f"Training completed of model {cfg.id}")
 
 if __name__ == "__main__":
     train()

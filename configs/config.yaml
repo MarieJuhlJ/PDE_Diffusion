@@ -1,6 +1,6 @@
 defaults:
   - experiment: exp1
-  - dataset: darcy
+  - dataset: cifar10
   - scheduler: ddpm
   - _self_
 
@@ -8,24 +8,16 @@ wandb: False #Avoid logging to wandb
 k_folds: null #if null no cross-val, else give number of folds
 idx_fold: null
 seed: 42
+id: null
+save_dir: 'models/'
 
 loss:
-  name: darcy
+  name: mse
 
 model:
   name: unet2d
   save_best_model: true
-  save_dir: './models'
-  id: null
-  x0_pred: 'mean'
-  monitor: val_loss
-  mode: min
-  dims:
-    x: 64
-    y: 64
-    z: 2
-    input_dims: 2
-    output_dims: 2
+  dims: null
 
 # Avoid logging to folders
 hydra:

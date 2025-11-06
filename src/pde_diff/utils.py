@@ -96,6 +96,8 @@ class CallbackRegistry:
 
     @classmethod
     def create(cls, cfg):
+        if cfg.name == None:
+            return None
         if cfg.name not in cls._registry:
             raise ValueError(f"Unknown callback: {cfg.name}")
         return cls._registry[cfg.name](cfg)

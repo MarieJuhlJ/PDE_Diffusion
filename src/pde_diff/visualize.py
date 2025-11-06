@@ -76,6 +76,6 @@ if __name__ == "__main__":
         cfg = yaml.safe_load(f)
     cfg = dict_to_namespace(cfg)
     diffusion_model = DiffusionModel(cfg)
-    diffusion_model.load_model(model_path / model_id / f"best-{cfg.model.monitor}-weights.pt")
+    diffusion_model.load_model(model_path / model_id / f"best-val_loss-weights.pt")
     diffusion_model = diffusion_model.to('cuda' if torch.cuda.is_available() else 'cpu')
     plot_samples(diffusion_model, n=4)
