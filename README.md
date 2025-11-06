@@ -2,12 +2,17 @@
 
 Repository for a Master Thesis focused on diffusion models with PDE constraints.
 
-# 🚀 Run the Darcy Experiment
+# 🚀 Experiments:
 
 To train the model on the **Darcy dataset**, run:
 
 ```bash
 python src/pde_diff/train.py dataset=darcy loss.name=darcy
+```
+
+To train the model on the **ERA5**, run:
+```bash
+1234
 ```
 
 ## Project structure
