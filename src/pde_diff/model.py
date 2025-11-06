@@ -43,12 +43,11 @@ class DiffusionModel(pl.LightningModule):
 
         if self.conditional:
             noisy_images = torch.cat([conditionals, noisy_images], dim=1)
+            x_t = conditionals[:,conditionals.shape[1]//2:,:,:][:,:(noisy_images.shape[1]-conditionals.shape[1]),:,:] # what is this?
 
         model_out = self.model(noisy_images, steps)
         variance = self.scheduler.posterior_variance[steps]
-        self.loss_fn.c_data = self.scheduler.p2_loss_weight[steps] #https://arxiv.org/pdf/2303.09556.pdf
-        if self.conditional:
-                x_t = conditionals[:,conditionals.shape[1]//2:,:,:][:,:(noisy_images.shape[1]-conditionals.shape[1]),:,:] # what is this?
+        self.loss_fn.c_data = self.scheduler.p2_loss_weight[steps] #https://arxiv.org/pdf/2303.09556.pdf                
         loss = self.loss_fn(model_out=model_out, target=state, x0_hat=model_out, var=variance)
         self.log("train_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
         return loss
@@ -92,8 +91,7 @@ class DiffusionModel(pl.LightningModule):
         self.log("val_darcy_residual", darcy_res, prog_bar=True, on_epoch=True, sync_dist=True)
 
     def configure_optimizers(self):
-        # optimizer = torch.optim.AdamW(self.parameters(), lr=self.hp_config.lr, weight_decay=self.hp_config.weight_decay)
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.hp_config.lr)
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.hp_config.lr, weight_decay=self.hp_config.weight_decay)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.99)
         return [optimizer], [scheduler]
 
