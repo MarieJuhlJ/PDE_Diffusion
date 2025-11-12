@@ -155,9 +155,9 @@ class ERA5Dataset(Dataset):
         self.single_features = list(cfg.single_features)
         self.static_features = list(cfg.static_features)
 
-        if cfg.get("normalize", True):
+        self.normalization_on = cfg.get("normalize", True)
+        if self.normalization_on:
             self.means, self.stds, self.diff_means, self.diff_stds = self._init_means_and_stds()
-
 
     def _init_means_and_stds(self):
         # TODO: Handle missing features more gracefully aka actually implement them
@@ -276,7 +276,7 @@ class ERA5Dataset(Dataset):
 
 
         # Normalize inputs
-        if cfg.get("normalize", True):
+        if self.normalization_on:
             inputs_norm = self._normalize(raw_inputs, self.means, self.stds)
         else:
             inputs_norm = raw_inputs

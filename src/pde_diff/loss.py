@@ -30,9 +30,9 @@ class PDE_loss(nn.Module):
 @LossRegistry.register("mse")
 class MSE(nn.Module):
     def __init__(self, cfg):
+        super().__init__()
         self.c_data = None
         self.mse = nn.MSELoss(reduction='none')
-        super().__init__()
 
     def forward(self, model_out, target, **kwargs):
         if self.c_data is None:
@@ -50,7 +50,7 @@ class DarcyLoss(PDE_loss):
         self.input_dim = 2
         self.pixels_per_dim = 64
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
+
         domain_length = 1.0
         d0 = domain_length / (self.pixels_per_dim - 1)
         d1 = domain_length / (self.pixels_per_dim - 1)
@@ -65,7 +65,7 @@ class DarcyLoss(PDE_loss):
         w = int(round(w_frac * H))
         f = torch.zeros((H, W), device=device, dtype=dtype)
         f[:w, :w] = r
-        f[-w:, -w:] = -r 
+        f[-w:, -w:] = -r
         return f
 
     def darcy_residual_F(self, x):
@@ -102,7 +102,7 @@ class DarcyLoss(PDE_loss):
         residual_loss = -1. * residual_log_likelihood
         return residual_loss.mean()
 
-    def create_trapezoidal_weights(self):        
+    def create_trapezoidal_weights(self):
         # identify corner nodes
         trapezoidal_weights = torch.zeros((1, self.pixels_per_dim, self.pixels_per_dim))
         trapezoidal_weights = trapezoidal_weights.to(self.device)
@@ -126,7 +126,7 @@ class DarcyLoss(PDE_loss):
     def compute_residual(self, x0_pred):
         assert len(x0_pred.shape) == 4, 'Model output must be a tensor shaped as an image (with explicit axes for the spatial dimensions).'
         batch_size, output_dim, pixels_per_dim, pixels_per_dim = x0_pred.shape
-        
+
         p = x0_pred[:, 0]
         permeability_field = x0_pred[:, 1]
         p_d0 = self.grads.stencil_gradients(p, mode='d_d0')
@@ -142,7 +142,7 @@ class DarcyLoss(PDE_loss):
         x0_pred = generalized_image_to_b_xy_c(x0_pred)
         grad_p = generalized_image_to_b_xy_c(grad_p)
         velocity_jacobian = generalized_image_to_b_xy_c(velocity_jacobian)
-                
+
         # obtain equilibrium equations for residual
         eq_0 = velocity_jacobian[:,:, 0, 0] + velocity_jacobian[:, :, 1, 1] - self.f_s
         residual = eq_0
@@ -153,7 +153,7 @@ class DarcyLoss(PDE_loss):
         x0_pred_zero_p = x0_pred[:,:,0] - correction
         x0_pred_zero_p = torch.stack([x0_pred_zero_p, x0_pred[:,:,1]], dim=-1)
         x0_pred = x0_pred_zero_p
-        
+
         # manually add BCs
         # reshape output to match image shape
         grad_p_img = generalized_b_xy_c_to_image(grad_p)
@@ -169,7 +169,7 @@ class DarcyLoss(PDE_loss):
         return residual.mean(dim=tuple(range(1, residual.ndim))) if residual.ndim > 1 else residual
 
 def gaussian_log_likelihood(x, means, variance, return_full = False):
-    centered_x = x - means    
+    centered_x = x - means
     squared_diffs = (centered_x ** 2) / variance
     if return_full:
         log_likelihood = -0.5 * (squared_diffs + torch.log(variance) + torch.log(2 * torch.pi)) # full log likelihood with constant terms
