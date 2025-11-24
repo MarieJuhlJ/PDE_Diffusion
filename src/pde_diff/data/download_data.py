@@ -14,11 +14,16 @@ request = {
     "variable": [
         "u_component_of_wind",
         "v_component_of_wind",
-        "vorticity"
+        "potential_vorticity",
+        "temperature",
+        "geopotential"
     ],
     "year": ["2024"],
     "month": ["09"],
-    "day": ["29", "30"],
+    "day": ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10",
+        "11", "12", "13", "14", "15", "16", "17", "18", "19", "20",
+        "21", "22", "23", "24", "25", "26", "27", "28", "29", "30",
+        "31"],
     "time": [
         "00:00", "01:00", "02:00",
         "03:00", "04:00", "05:00",
@@ -29,7 +34,7 @@ request = {
         "18:00", "19:00", "20:00",
         "21:00", "22:00", "23:00"
     ],
-    "pressure_level": ["500","550"],
+    "pressure_level": ["450", "500","550"],
     "data_format": "grib",
     #"download_format": "unarchived"
 }

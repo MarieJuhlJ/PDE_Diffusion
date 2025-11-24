@@ -11,11 +11,13 @@ ERA5_DATASET_PATH = "data/era5/zarr"
 FEATURES = [
     "v",
     "u",
-    "vo"
+    "pv",
+    "t",
+    "z"
 ]
 
 # Pressure levels to include for 3D variables
-PRESSURE_LEVELS = ["500", "550"]  # Add more levels as needed
+PRESSURE_LEVELS = ["450", "500", "550"]  # Add more levels as needed
 
 # Output dictionaries
 ERA5_MEANS = {}
