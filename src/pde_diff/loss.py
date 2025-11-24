@@ -30,9 +30,9 @@ class PDE_loss(nn.Module):
 @LossRegistry.register("mse")
 class MSE(nn.Module):
     def __init__(self, cfg):
+        super().__init__()
         self.c_data = None
         self.mse = nn.MSELoss(reduction='none')
-        super().__init__()
 
     def forward(self, model_out, target, **kwargs):
         if self.c_data is None:

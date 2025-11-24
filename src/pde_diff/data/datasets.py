@@ -114,6 +114,7 @@ class ERA5Dataset(Dataset):
         """
         super().__init__()
         self.data = xr.open_zarr(cfg.path, chunks={})
+        self.cfg = cfg
 
         # Downsample longitude and latitude
         downsample_factor = cfg.get("downsample_factor", 2)  # Keep every 2nd grid point
@@ -276,7 +277,7 @@ class ERA5Dataset(Dataset):
 
 
         # Normalize inputs
-        if cfg.get("normalize", True):
+        if self.cfg.get("normalize", True):
             inputs_norm = self._normalize(raw_inputs, self.means, self.stds)
         else:
             inputs_norm = raw_inputs
