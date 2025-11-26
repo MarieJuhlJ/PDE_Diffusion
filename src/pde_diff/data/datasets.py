@@ -310,7 +310,10 @@ class ERA5Dataset(Dataset):
 
         # Normalize target residuals
         raw_state_change = raw_state - raw_inputs[1, : raw_state.shape[1], :, :]
-        state_change = self._normalize(raw_state_change, self.diff_means, self.diff_stds)
+        if self.normalization_on:
+            state_change = self._normalize(raw_state_change, self.diff_means, self.diff_stds)
+        else:
+            state_change = raw_state_change
         state_change = np.nan_to_num(state_change).astype(np.float32)
 
         return (prev_inputs, state_change)
