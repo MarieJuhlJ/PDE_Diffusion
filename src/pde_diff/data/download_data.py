@@ -49,3 +49,7 @@ print(f"Downloaded ERA5 data to {grib_file}")
 ds = xr.open_dataset(grib_file, engine='cfgrib')
 ds.to_zarr('./data/era5/zarr',mode="w")
 print("Converted GRIB file to Zarr format at data/era5/zarr")
+
+#delete the grib file to save space
+os.remove(grib_file)
+print(f"Deleted temporary GRIB file {grib_file}")
