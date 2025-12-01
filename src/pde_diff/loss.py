@@ -2,9 +2,11 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 import einops as ein
-from pde_diff.utils import LossRegistry, DatasetRegistry
+import math
+from pde_diff.utils import LossRegistry, DatasetRegistry, GradientHelper
 from pde_diff.grad_utils import *
 from pde_diff import data
+from pde_diff.data import datasets
 
 class PDE_loss(nn.Module):
     def __init__(self, residual_fns):
@@ -49,7 +51,7 @@ class DarcyLoss(PDE_loss):
         self.c = 1e-6
         self.input_dim = 2
         self.pixels_per_dim = 64
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cpu")#torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         domain_length = 1.0
         d0 = domain_length / (self.pixels_per_dim - 1)
@@ -168,6 +170,124 @@ class DarcyLoss(PDE_loss):
 
         return residual.mean(dim=tuple(range(1, residual.ndim))) if residual.ndim > 1 else residual
 
+class VorticityLoss(PDE_loss):
+    def __init__(self, cfg):
+        residual_fns = [self.compute_residual]
+        self.Omega = 7.292e-5 # rad s^-1
+        self.T_0 = 288.15 #K
+        self.R = 287 #J K^-1 kg^-1
+        self.c_p = 1004 #J K^-1 kg^-1
+        self.p_0 = 101325 #Pa
+        self.a = 6.37e6 # m
+        self.lat_range = [70, 46] # hardcoded for now
+        self.lon_range = [0, 359] # hardcoded for now
+        self.p = [45000, 50000, 55000] # (Pa) hardcoded for now
+        self.dp = 5000 # (Pa) hardcoded for now
+
+        lon_grid, lat_grid, dx_grid, dy_grid = self.make_distance_grids(
+            nlon=480, # hardcoded for now
+            lon_range=self.lon_range,
+            nlat=32, # hardcoded for now
+            lat_range=self.lat_range,
+            device=torch.device("cpu"),#torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+            dtype=torch.float32,
+        )
+
+        self.gradient_helper = GradientHelper(grid_distances={
+            'dx': dx_grid[None, None, :, :],
+            'dy': dy_grid[None, None, :, :],
+        })
+
+        super().__init__(residual_fns)
+
+    def make_distance_grids(self, nlon, lon_range, nlat, lat_range, device, dtype):
+        lon = torch.linspace(lon_range[0], lon_range[1], nlon, device=device, dtype=dtype)
+        lat = torch.linspace(lat_range[0], lat_range[1], nlat, device=device, dtype=dtype)
+        lon_grid, lat_grid = torch.meshgrid(lon, lat, indexing='ij')  # shape: (nlon, nlat)
+
+        lon_n = lon_grid.roll(shifts=-1, dims=0)
+        lat_n = lat_grid.roll(shifts=-1, dims=0)
+        dx_grid = self.haversine(lon_grid, lat_grid, lon_n, lat_n)
+
+        lon_e = lon_grid.roll(shifts=-1, dims=1)
+        lat_e = lat_grid.roll(shifts=-1, dims=1)
+        dy_grid = self.haversine(lon_grid, lat_grid, lon_e, lat_e)
+
+        return lon_grid, lat_grid, dx_grid, dy_grid
+    
+    def haversine(self, lon1, lat1, lon2, lat2):
+            lon1 = torch.deg2rad(lon1)
+            lat1 = torch.deg2rad(lat1)
+            lon2 = torch.deg2rad(lon2)
+            lat2 = torch.deg2rad(lat2)
+
+            dlat = lat2 - lat1
+            dlon = lon2 - lon1
+
+            pi = math.pi
+            dlon = (dlon + pi) % (2 * pi) - pi
+
+            a = torch.sin(dlat / 2)**2 + torch.cos(lat1) * torch.cos(lat2) * torch.sin(dlon / 2)**2
+            c = 2 * torch.atan2(torch.sqrt(a), torch.sqrt(1 - a).clamp(min=1e-12))
+
+            return self.a * c
+
+
+    def set_mean_and_std(self, mean, std, diff_mean, diff_std):
+        self.mean = mean
+        self.std = std
+        self.diff_mean = diff_mean
+        self.diff_std = diff_std
+
+    def theta_0(self, p):
+        return self.T_0 * (self.p_0 / p)**(self.R / self.c_p)
+    
+    def dx_dp(self, x):
+        return ((x[:, -1] - x [:, 0]) / (self.dp * 2))
+    
+    def dxx_dpp(self, x):
+        diff_1 = (x[:, 1] - x[:, 0]) / self.dp
+        diff_2 = (x [:, 2] - x[:, 1]) / self.dp
+        return ((diff_2 - diff_1)/self.dp)
+    
+    def sigma(self, p):
+        kappa = self.R / self.c_p
+        return (self.R * self.T_0 * kappa) / (p**2)
+
+
+    def get_original_states(self, x0_previous, x0_pred):
+        previous_states_unnormalized = (x0_previous * self.std[None, :, None, None]) + self.mean[None, :, None, None]
+        current_state_unnormalized = (x0_pred * self.diff_std[None, :, None, None]) + self.mean[None, :, None, None]
+        previous_state = ein.rearrange(previous_states_unnormalized, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
+        current_state = ein.rearrange(current_state_unnormalized, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
+        return previous_state, current_state
+
+    def compute_residual(self, x0_previous, x0_change_pred):
+        previous, current = self.get_original_states(x0_previous, x0_change_pred)
+
+        wind_u_p, wind_v_p, pv_p, temp_p, geo_p = [previous[:, :, i] for i in range(5)]
+        wind_u_c, wind_v_c, pv_c, temp_c, geo_c = [current[:, :, i] for i in range(5)]
+        device = x0_change_pred.device
+        dtype = x0_change_pred.dtype
+        b, lev, nlon, nlat = geo_c.shape
+
+        lats_deg = torch.linspace(self.lat_range[0],
+                                  self.lat_range[1],
+                                  nlat, device=device, dtype=dtype)
+        phi = lats_deg * math.pi / 180.0
+        f = 2.0 * self.Omega * torch.sin(phi)[None, None, None, :]
+        phi0 = phi.mean()
+        f0 = 2.0 * self.Omega * torch.sin(phi0)
+
+        p = torch.tensor(self.p, device=device, dtype=dtype)[None, :, None, None]
+        sigma = self.sigma(p)
+        lap_geo = self.gradient_helper.laplacian_horizontal(geo_c)
+        A = f0 / sigma
+        term_vert = self.dx_dp(A) * self.dx_dp(geo_c) + A[:,1] * self.dxx_dpp(geo_c)
+        residual = (1/f0 * lap_geo + f)[:,1] + term_vert - pv_c[:, 1] # Holton 6.66
+        return residual
+        
+
 def gaussian_log_likelihood(x, means, variance, return_full = False):
     centered_x = x - means
     squared_diffs = (centered_x ** 2) / variance
@@ -182,41 +302,62 @@ def gaussian_log_likelihood(x, means, variance, return_full = False):
     return log_likelihood
 
 if __name__ == "__main__":
-    from types import SimpleNamespace
+    from torch.utils.data import DataLoader
+    from omegaconf import OmegaConf
 
-    cfg = SimpleNamespace(
-        name="fluid_data",
-        path="./data/darcy/",
-        use_double=False,
-        time_series=False,
-        validation_metrics=["mse", "darcy"],
-        dims=SimpleNamespace(
-            x=64,
-            y=64,
-            z=2
-        ),
-        train=True,
-        device="cpu"
+    cfg = OmegaConf.create(
+        {
+            "name": "era5",
+            "path": "/work3/s194572/data/era5/zarr/",  # jacobs path
+            "use_double": False,
+            "time_series": True,
+            "validation_metrics": ["mse", "era5_vorticity"],
+            "dims": {
+                "x": 480,
+                "y": 32,
+                "input_dims": 53,
+                "output_dims": 15,
+            },
+            "train": True,
+            "atmospheric_features": ["u", "v", "pv", "t", "z"],
+            "single_features": [],
+            "static_features": [],
+            "max_year": 2024,
+            "time_step": 2,
+            "lon_range": None,         # [0, 50]
+            "lat_range": [70, 46],
+            "downsample_factor": 3,
+        }
     )
 
     dataset = DatasetRegistry.create(cfg)
 
-    print(f"Dataset length: {len(dataset)}")
-    K, p = dataset[0]
-    randomK = torch.randn_like(K)
-    randomp = torch.randn_like(p)
-    dl = DarcyLoss(cfg)
-    x_true   = torch.stack((K, p), dim=0).unsqueeze(0)
-    x_rand   = torch.stack((randomK, randomp), dim=0).unsqueeze(0)
-    phys_true = dl.compute_residual(x_true).mean().item()
-    phys_rand = dl.compute_residual(x_rand).mean().item()
-    phys_true_own = dl.darcy_residual_F(x_true).mean().item()
-    phys_rand_own = dl.darcy_residual_F(x_rand).mean().item()
-    phys_true_loss = dl.darcy_residual_loss(x_true, var=1.0).item()
-    phys_rand_loss = dl.darcy_residual_loss(x_rand, var=1.0).item()
-    print("physics(true) :", phys_true)
-    print("physics(random):", phys_rand)
-    print("physics true (own)", phys_true_own)
-    print("physics rand (own)", phys_rand_own)
-    print("physics true (loss)", phys_true_loss)
-    print("physics rand (loss)", phys_rand_loss)
+    loader = DataLoader(
+        dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=0,
+    )
+
+    # Loss setup stays the same
+    loss = VorticityLoss(None)
+    loss.set_mean_and_std(dataset.means, dataset.stds,
+                          dataset.diff_means, dataset.diff_stds)
+
+    batch = next(iter(loader))   # <--- THIS is what you want
+    x = batch[0]
+    y = batch[1]
+    previous = x[:, 19:34]       # keep batch dim, slice second dim
+    current = y
+
+    r_era5 = loss.compute_residual(previous, current).pow(2).mean()
+    mean = previous.mean(dim=(0,2,3), keepdim=True)
+    std  = previous.std(dim=(0,2,3), keepdim=True)
+
+    random_prev = torch.randn_like(previous)
+    random_curr = torch.randn_like(current)
+    r_rand = loss.compute_residual(random_prev, random_curr).pow(2).mean()
+
+    print("ERA5 residual:", r_era5.item())
+    print("Random residual:", r_rand.item())
+
