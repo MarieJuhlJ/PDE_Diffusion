@@ -19,6 +19,7 @@ class PDE_loss(nn.Module):
     def forward(self, model_out, target, **kwargs):
         x0_hat = kwargs.get('x0_hat', None)
         var = kwargs.get('var', None)
+        conditionals = kwargs.get('conditionals', None)
 
         if self.c_data is None:
             total = self.mse(model_out, target).mean()
@@ -51,7 +52,7 @@ class DarcyLoss(PDE_loss):
         self.c = 1e-6
         self.input_dim = 2
         self.pixels_per_dim = 64
-        self.device = torch.device("cpu")#torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         domain_length = 1.0
         d0 = domain_length / (self.pixels_per_dim - 1)
@@ -170,9 +171,12 @@ class DarcyLoss(PDE_loss):
 
         return residual.mean(dim=tuple(range(1, residual.ndim))) if residual.ndim > 1 else residual
 
+@LossRegistry.register("vorticity")
 class VorticityLoss(PDE_loss):
     def __init__(self, cfg):
-        residual_fns = [self.compute_residual]
+        residual_fns = [self.vorticity_residual_loss]
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
         self.Omega = 7.292e-5 # rad s^-1
         self.T_0 = 288.15 #K
         self.R = 287 #J K^-1 kg^-1
@@ -189,7 +193,7 @@ class VorticityLoss(PDE_loss):
             lon_range=self.lon_range,
             nlat=32, # hardcoded for now
             lat_range=self.lat_range,
-            device=torch.device("cpu"),#torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+            device=self.device,
             dtype=torch.float32,
         )
 
@@ -197,7 +201,6 @@ class VorticityLoss(PDE_loss):
             'dx': dx_grid[None, None, :, :],
             'dy': dy_grid[None, None, :, :],
         })
-
         super().__init__(residual_fns)
 
     def make_distance_grids(self, nlon, lon_range, nlat, lat_range, device, dtype):
@@ -234,10 +237,12 @@ class VorticityLoss(PDE_loss):
 
 
     def set_mean_and_std(self, mean, std, diff_mean, diff_std):
-        self.mean = mean
-        self.std = std
-        self.diff_mean = diff_mean
-        self.diff_std = diff_std
+        device = self.device
+
+        self.mean = torch.as_tensor(mean).to(device)
+        self.std = torch.as_tensor(std).to(device)
+        self.diff_mean = torch.as_tensor(diff_mean).to(device)
+        self.diff_std = torch.as_tensor(diff_std).to(device)
 
     def theta_0(self, p):
         return self.T_0 * (self.p_0 / p)**(self.R / self.c_p)
@@ -263,12 +268,13 @@ class VorticityLoss(PDE_loss):
         return previous_state, current_state
 
     def compute_residual(self, x0_previous, x0_change_pred):
-        previous, current = self.get_original_states(x0_previous, x0_change_pred)
+        device = x0_change_pred.device
+        dtype = x0_change_pred.dtype
+        previous, current = self.get_original_states(x0_previous, x0_change_pred + x0_previous)
 
         wind_u_p, wind_v_p, pv_p, temp_p, geo_p = [previous[:, :, i] for i in range(5)]
         wind_u_c, wind_v_c, pv_c, temp_c, geo_c = [current[:, :, i] for i in range(5)]
-        device = x0_change_pred.device
-        dtype = x0_change_pred.dtype
+        
         b, lev, nlon, nlat = geo_c.shape
 
         lats_deg = torch.linspace(self.lat_range[0],
@@ -286,11 +292,24 @@ class VorticityLoss(PDE_loss):
         term_vert = self.dx_dp(A) * self.dx_dp(geo_c) + A[:,1] * self.dxx_dpp(geo_c)
         residual = (1/f0 * lap_geo + f)[:,1] + term_vert - pv_c[:, 1] # Holton 6.66
         return residual
+    
+    def vorticity_residual_loss(self, x0_hat, var):
+        num_channels = x0_hat.shape[1]
+        num_batch = x0_hat.shape[0]
+        x0_previous = x0_hat[:, :num_channels//2, :, :]
+        x0_change_pred = x0_hat[:, num_channels//2:, :, :]
+
+        residual = self.compute_residual(x0_previous, x0_change_pred)
+        residual_log_likelihood = gaussian_log_likelihood(torch.zeros_like(residual), means=residual, variance=var[:num_batch])
+        residual_loss = -1. * residual_log_likelihood
+        return residual_loss.mean()
         
 
 def gaussian_log_likelihood(x, means, variance, return_full = False):
     centered_x = x - means
-    squared_diffs = (centered_x ** 2) / variance
+    expand_dims = centered_x.dim() - variance.dim()
+    variance_broadcast = variance.view(*variance.shape, *([1] * expand_dims))
+    squared_diffs = (centered_x ** 2) / variance_broadcast
     if return_full:
         log_likelihood = -0.5 * (squared_diffs + torch.log(variance) + torch.log(2 * torch.pi)) # full log likelihood with constant terms
     else:
@@ -339,10 +358,10 @@ if __name__ == "__main__":
         num_workers=0,
     )
 
-    # Loss setup stays the same
     loss = VorticityLoss(None)
     loss.set_mean_and_std(dataset.means, dataset.stds,
                           dataset.diff_means, dataset.diff_stds)
+    loss.device = torch.device("cpu")
 
     batch = next(iter(loader))   # <--- THIS is what you want
     x = batch[0]

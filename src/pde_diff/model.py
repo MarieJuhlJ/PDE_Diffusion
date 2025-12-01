@@ -15,12 +15,12 @@ from pde_diff.data import datasets
 
 
 class DiffusionModel(pl.LightningModule):
-    def __init__(self, cfg):
+    def __init__(self, cfg, loss_fn):
         super().__init__()
         self.model = ModelRegistry.create(cfg.model)
         self.scheduler = SchedulerRegistry.create(cfg.scheduler)
-        self.loss_fn = LossRegistry.create(cfg.loss)
         self.hp_config = cfg.experiment.hyperparameters
+        self.loss_fn = loss_fn
         self.data_dims = cfg.dataset.dims
 
         self.conditional = cfg.dataset.time_series # Add conditional flag
@@ -43,12 +43,16 @@ class DiffusionModel(pl.LightningModule):
 
         if self.conditional:
             noisy_images = torch.cat([conditionals, noisy_images], dim=1)
-            x_t = conditionals[:,conditionals.shape[1]//2:,:,:][:,:(noisy_images.shape[1]-conditionals.shape[1]),:,:] # what is this?
-
+        
         model_out = self.model(noisy_images, steps)
+        x0_hat = model_out
+
+        if self.conditional:
+            x0_hat = torch.cat([conditionals[:, 19:34], model_out], dim=1)
+
         variance = self.scheduler.posterior_variance[steps]
         self.loss_fn.c_data = self.scheduler.p2_loss_weight[steps] #https://arxiv.org/pdf/2303.09556.pdf                
-        loss = self.loss_fn(model_out=model_out, target=state, x0_hat=model_out, var=variance)
+        loss = self.loss_fn(model_out=model_out, target=state, x0_hat=x0_hat, var=variance)
         self.log("train_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
         return loss
 
@@ -65,9 +69,13 @@ class DiffusionModel(pl.LightningModule):
             noisy_images = torch.cat([conditionals, noisy_images], dim=1)
 
         model_out = self.model(noisy_images, steps)
+        x0_hat = model_out
+        if self.conditional:
+            x0_hat = torch.cat([conditionals[:, 19:34], model_out], dim=1)
+        
         variance = self.scheduler.posterior_variance[steps]
         self.loss_fn.c_data = self.scheduler.p2_loss_weight[steps]
-        loss = self.loss_fn(model_out=model_out, target=target, x0_hat=model_out, var=variance)
+        loss = self.loss_fn(model_out=model_out, target=target, x0_hat=x0_hat, var=variance)
         self.log("val_loss", loss, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
         self.additional_validation_metrics(model_out, target, steps)
     

@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader, Subset
 from omegaconf import DictConfig, OmegaConf
 from sklearn.model_selection import KFold
 
-from pde_diff.utils import DatasetRegistry, CallbackRegistry, unique_id
+from pde_diff.utils import DatasetRegistry, LossRegistry, unique_id
 from pde_diff.model import DiffusionModel
 from pde_diff.callbacks import SaveBestModel
 import pde_diff.callbacks
@@ -19,8 +19,13 @@ def train(cfg: DictConfig):
     cfg.id = unique_id(length=5) if cfg.id == None else cfg.id
     cfg.model.dims = cfg.dataset.dims
 
-    model = DiffusionModel(cfg)
     dataset = DatasetRegistry.create(cfg.dataset)
+    loss_fn = LossRegistry.create(cfg.loss)
+    if cfg.dataset.name == 'era5': #semi cursed (TODO clean up)
+        loss_fn.set_mean_and_std(dataset.means, dataset.stds,
+                              dataset.diff_means, dataset.diff_stds)
+
+    model = DiffusionModel(cfg, loss_fn)
 
     if cfg.get("k_folds", None):
         # Create a split and select appropriate subset of data for this fold:
