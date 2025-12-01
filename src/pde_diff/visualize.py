@@ -119,6 +119,23 @@ def get_data_sample(dataset, sample_idx, variable, level=500):
     data = inputs[var_idx * len(dataset.pressure_levels) + level_idx]
     return data
 
+def get_time_series(dataset, variable, level=500, coords=(12.568, 55.676)):
+    """
+    Extract a time series of a variable at a specific pressure level from the ERA5 dataset.
+
+    Args:
+        dataset (ERA5Dataset): The ERA5 dataset.
+        variable (str): Variable to extract (e.g., 'temperature').
+        level (int): Pressure level to focus on (default: 500hPa).
+        coords (tuple): Tuple of (longitude, latitude) to extract the time series from. Default is (12.568, 55.676) (Copenhagen).
+    """
+    level_idx = np.where(dataset.pressure_levels == level)[0][0]
+    lon, lat = coords
+    lon_idx = np.argmin(np.abs(dataset.grid_lon - lon))
+    lat_idx = np.argmin(np.abs(dataset.grid_lat - lat))
+    time_series = dataset.data[variable][:, level_idx, lon_idx, lat_idx]
+    return time_series
+
 
 def visualize_era5_sample(data_sample, variable, level=500, big_data_sample=None, sample_idx=None, dir=Path("./reports/figures/samples")):
     """
@@ -241,6 +258,35 @@ def visualize_noise_schedule(scheduler, data_sample, variable, level=500, sample
         print(f"Saved visualization to {plot_path}")
 
 
+def visualize_time_series(dataset, variable, level=500, dir=Path("./reports/figures/time_series"), coords=(12.568, 55.676)):
+    """
+    Visualize a time series of a variable at a specific pressure level from the ERA5 dataset.
+
+    Args:
+        dataset (ERA5Dataset): The ERA5 dataset.
+        variable (str): Variable to visualize (e.g., 'temperature').
+        level (int): Pressure level to focus on (default: 500hPa).
+        dir (Path): Directory to save the plots.
+        coords (tuple): Tuple of (longitude, latitude) to extract the time series from. Default is (12.568, 55.676) (Copenhagen).
+    """
+
+    dir.mkdir(parents=True, exist_ok=True)
+    lon, lat = coords
+
+    time_series = np.array(get_time_series(dataset, variable, level, coords))
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.plot(time_series, label=f"{VAR_NAMES.get(variable, variable)} at {level} hPa")
+    ax.set_title(f"Time Series of {VAR_NAMES.get(variable, variable)} at {level} hPa\nLocation: Lon {lon}, Lat {lat}")
+    ax.set_xlabel("Time Step")
+    ax.set_ylabel(VAR_NAMES.get(variable, variable))
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+    plt.tight_layout()
+    plot_path = dir / f"time_series_{variable}_{level}hPa_lon{lon}_lat{lat}{PLOT_TYPE}"
+    plt.savefig(plot_path, bbox_inches='tight', pad_inches=0.05)
+    print(f"Saved time series plot to {plot_path}")
+
+
 if __name__ == "__main__":
     #model_path = Path('./models')
     #model_id = 'exp1-ihnrf'
@@ -270,7 +316,7 @@ if __name__ == "__main__":
     sample_idx = 0  # Index of the sample to visualize
     variable = "t"  # Variable to visualize
     level = 500  # Pressure level in hPa
-    for variable in cfg.atmospheric_features:
+    """for variable in cfg.atmospheric_features:
         data_sample = get_data_sample(era5_dataset, sample_idx, variable, level)
         data_sample_full = get_data_sample(era5_dataset_full, sample_idx, variable, level)
         visualize_era5_sample(data_sample, variable, level, big_data_sample=data_sample_full)
@@ -287,4 +333,8 @@ if __name__ == "__main__":
     #visualize_noise_schedule(scheduler, data_sample, variable, level, sample_idx)
 
     # Visualize a full sample from the dataset without the subset overlay
-    visualize_era5_sample_full(data_sample_full, variable, level)
+    visualize_era5_sample_full(data_sample_full, variable, level)"""
+
+    # Visualize time series
+    for variable in cfg.atmospheric_features:
+        visualize_time_series(era5_dataset, variable=variable, level=500, coords=(12.568, 55.676))
