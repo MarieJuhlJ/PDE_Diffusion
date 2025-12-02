@@ -14,20 +14,21 @@ class PDE_loss(nn.Module):
         self.mse = nn.MSELoss(reduction='none')
         self.residual_fns = residual_fns
         self.c_data = None
-        self.c_residuals = [1e-3 for _ in residual_fns]
+        self.c_residuals = [self.cfg.c_residual for _ in residual_fns]
 
     def forward(self, model_out, target, **kwargs):
         x0_hat = kwargs.get('x0_hat', None)
         var = kwargs.get('var', None)
-        conditionals = kwargs.get('conditionals', None)
 
         if self.c_data is None:
             total = self.mse(model_out, target).mean()
         else:
             total = (self.mse(model_out, target) * self.c_data[:, None, None, None]).mean()
+
         for fn, w in zip(self.residual_fns, self.c_residuals):
-            r = fn(x0_hat, var)
-            total += + w * r
+            if w > 0:
+                r = fn(x0_hat, var)
+                total += + w * r
         return total
 
 @LossRegistry.register("mse")
@@ -47,6 +48,7 @@ class MSE(nn.Module):
 class DarcyLoss(PDE_loss):
     def __init__(self, cfg):
         residual_fns = [self.darcy_residual_loss]
+        self.cfg = cfg
         self.eps = 1e-8
         self.eps_K = 1e-6
         self.c = 1e-6
@@ -92,14 +94,6 @@ class DarcyLoss(PDE_loss):
         return div_K_grad_p + f
 
     def darcy_residual_loss(self, x0_hat, var):
-        # sigma_t = torch.as_tensor(sigma_t, device=x0_hat.device, dtype=x0_hat.dtype)
-
-        # x = x0_hat.float()
-        # F = self.darcy_residual_F(x)
-
-        # weight = 0.5 * self.c / sigma_t
-        # per_sample = (F**2).mean(dim=(1, 2)) * weight
-        # return per_sample.mean()
         residual = self.compute_residual(x0_hat)
         residual_log_likelihood = gaussian_log_likelihood(torch.zeros_like(residual), means=residual, variance=var)
         residual_loss = -1. * residual_log_likelihood
@@ -175,6 +169,7 @@ class DarcyLoss(PDE_loss):
 class VorticityLoss(PDE_loss):
     def __init__(self, cfg):
         residual_fns = [self.vorticity_residual_loss]
+        self.cfg = cfg
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.Omega = 7.292e-5 # rad s^-1
@@ -348,6 +343,12 @@ if __name__ == "__main__":
             "downsample_factor": 3,
         }
     )
+    cfg_loss = OmegaConf.create(
+        {
+            "name": "vorticity",
+            "c_residual": 1e-3,
+        }
+    )
 
     dataset = DatasetRegistry.create(cfg)
 
@@ -358,7 +359,7 @@ if __name__ == "__main__":
         num_workers=0,
     )
 
-    loss = VorticityLoss(None)
+    loss = LossRegistry.create(cfg_loss)
     loss.set_mean_and_std(dataset.means, dataset.stds,
                           dataset.diff_means, dataset.diff_stds)
     loss.device = torch.device("cpu")

@@ -1,12 +1,15 @@
 from pathlib import Path
 from model import DiffusionModel
-from utils import dict_to_namespace
+from utils import dict_to_namespace, DatasetRegistry, LossRegistry
+from data.datasets import *
+from loss import *
+from omegaconf import OmegaConf
 import torch
 import matplotlib.pyplot as plt
 import pandas as pd
 import yaml
 
-def plot_samples(model, n=4, out_dir=Path('./reports/figures')):
+def plot_samples_darcy(model, n=4, out_dir=Path('./reports/figures')):
     save_dir = Path(out_dir) / model_id
     save_dir.mkdir(parents=True, exist_ok=True)
     samples = model.sample_loop(batch_size=n)
@@ -66,16 +69,47 @@ def plot_training_metrics(model_id, out_dir=Path("./reports/figures")):
             ax.figure.savefig(save_dir / "val_metrics_combined.png", dpi=150)
             plt.close(ax.figure)
 
+
+def plot_and_save_era5(csv_path, out_dir):
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    df = pd.read_csv(csv_path).apply(pd.to_numeric, errors="ignore").dropna(subset=["step"])
+    df = df.sort_values("step")
+
+    # ---- Loss plot ----
+    train_df = df.dropna(subset=["train_loss"])
+    val_df = df.dropna(subset=["val_loss"])
+    
+    plt.plot(train_df.epoch, train_df.train_loss, label="train_loss")
+    plt.plot(val_df.epoch, val_df.val_loss, label="val_loss")
+    plt.legend(); plt.grid(); plt.title("Loss")
+    plt.savefig(out_dir / "loss.png"); plt.clf()
+
+    res_df = df.dropna(subset=["val_era5_vorticity_residual"])
+    mse_df = df.dropna(subset=["val_mse_(weighted)"])
+
+    # ---- Residual + MSE plot ----
+    plt.plot(res_df.epoch, res_df.val_era5_vorticity_residual, label="era5_residual")
+    plt.plot(mse_df.epoch, mse_df["val_mse_(weighted)"], label="mse_weighted")
+    plt.legend(); plt.grid(); plt.title("Residuals & MSE")
+    plt.savefig(out_dir / "residuals.png"); plt.clf()
+
+    return
+
+
+
 if __name__ == "__main__":
     model_path = Path('./models')
-    model_id = 'exp1-ihnrf'
+    model_id = 'exp1-auxcy'
 
-    plot_training_metrics(model_id)
+    cfg = OmegaConf.load(model_path / model_id / "config.yaml")
 
-    with open(model_path / model_id / 'config.yaml', 'r') as f:
-        cfg = yaml.safe_load(f)
-    cfg = dict_to_namespace(cfg)
-    diffusion_model = DiffusionModel(cfg)
+    dataset = DatasetRegistry.create(cfg.dataset)
+    loss_fn = LossRegistry.create(cfg.loss)
+    if cfg.dataset.name == 'era5' and cfg.loss.name == 'vorticity': #semi cursed (TODO clean up)
+        loss_fn.set_mean_and_std(dataset.means, dataset.stds,
+                              dataset.diff_means, dataset.diff_stds)
+    diffusion_model = DiffusionModel(cfg, loss_fn)
     diffusion_model.load_model(model_path / model_id / f"best-val_loss-weights.pt")
     diffusion_model = diffusion_model.to('cuda' if torch.cuda.is_available() else 'cpu')
-    plot_samples(diffusion_model, n=4)
+    plot_and_save_era5(Path('logs') / model_id / 'version_0/metrics.csv', Path('./reports/figures') / model_id)

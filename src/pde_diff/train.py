@@ -21,7 +21,7 @@ def train(cfg: DictConfig):
 
     dataset = DatasetRegistry.create(cfg.dataset)
     loss_fn = LossRegistry.create(cfg.loss)
-    if cfg.dataset.name == 'era5': #semi cursed (TODO clean up)
+    if cfg.dataset.name == 'era5' and cfg.loss.name == 'vorticity': #semi cursed (TODO clean up)
         loss_fn.set_mean_and_std(dataset.means, dataset.stds,
                               dataset.diff_means, dataset.diff_stds)
 
@@ -69,7 +69,7 @@ def train(cfg: DictConfig):
         callbacks=[SaveBestModel()]
     )
 
-    #model.training_step(next(iter(train_dataloader)), 0)  # Test run of training step
+    print(f"Starting training of model {cfg.id}")
     trainer.fit(model, train_dataloader, val_dataloader)
     print(f"Training completed of model {cfg.id}")
 

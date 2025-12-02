@@ -14,4 +14,4 @@
 . /work3/s194572/miniconda3/etc/profile.d/conda.sh
 conda activate pde_diff
 
-python src/pde_diff/train.py experiment.hyperparameters.max_epochs=200 dataset=era5 dataset.path=/work3/s194572/data/era5/zarr/
+python src/pde_diff/train.py experiment.hyperparameters.max_epochs=200 dataset=era5 dataset.path=/work3/s194572/data/era5/zarr/ loss.name=vorticity loss.c_residual=0.0

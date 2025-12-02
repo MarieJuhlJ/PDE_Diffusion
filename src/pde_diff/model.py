@@ -48,10 +48,10 @@ class DiffusionModel(pl.LightningModule):
         x0_hat = model_out
 
         if self.conditional:
-            x0_hat = torch.cat([conditionals[:, 19:34], model_out], dim=1)
+            x0_hat = torch.cat([conditionals[:, 19:34], model_out], dim=1) #hardcoded for now (TODO)
 
         variance = self.scheduler.posterior_variance[steps]
-        self.loss_fn.c_data = self.scheduler.p2_loss_weight[steps] #https://arxiv.org/pdf/2303.09556.pdf                
+        self.loss_fn.c_data = self.scheduler.p2_loss_weight[steps] #https://arxiv.org/pdf/2303.09556.pdf
         loss = self.loss_fn(model_out=model_out, target=state, x0_hat=x0_hat, var=variance)
         self.log("train_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
         return loss
@@ -71,32 +71,39 @@ class DiffusionModel(pl.LightningModule):
         model_out = self.model(noisy_images, steps)
         x0_hat = model_out
         if self.conditional:
-            x0_hat = torch.cat([conditionals[:, 19:34], model_out], dim=1)
+            x0_hat = torch.cat([conditionals[:, 19:34], model_out], dim=1) #hardcoded for now (TODO)
         
         variance = self.scheduler.posterior_variance[steps]
         self.loss_fn.c_data = self.scheduler.p2_loss_weight[steps]
         loss = self.loss_fn(model_out=model_out, target=target, x0_hat=x0_hat, var=variance)
-        self.log("val_loss", loss, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
-        self.additional_validation_metrics(model_out, target, steps)
+        self.log("val_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
+        self.additional_validation_metrics(model_out, target, x0_hat, steps)
     
-    def additional_validation_metrics(self, model_out, target, steps):
+    def additional_validation_metrics(self, model_out, target, x0_hat, steps):
         metrics = self.cfg.dataset.validation_metrics
         for metric_name in metrics:
             if metric_name == "mse":
                 mse = (self.mse(model_out, target) * self.scheduler.p2_loss_weight[steps][:, None, None, None]).mean()
                 self.log("val_mse_(weighted)", mse, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
+
             if metric_name == 'era5_vorticity':
-                pass
+                assert self.cfg.loss.name == 'vorticity', "era5_vorticity metric can only be used with vorticity loss"
+                num_channels = x0_hat.shape[1]
+                x0_previous = x0_hat[:, :num_channels//2, :, :]
+                x0_change_pred = x0_hat[:, num_channels//2:, :, :]
+                residual = self.loss_fn.compute_residual(x0_previous, x0_change_pred).pow(2).mean()
+                self.log("val_era5_vorticity_residual", residual, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
+
 
     def on_validation_epoch_end(self):
         """For on_epoch_end validation metrics"""
-        if "darcy" not in self.cfg.dataset.validation_metrics:
-            return
-
-        with torch.no_grad():
-            x0_preds = self.sample_loop(batch_size=16)
-            darcy_res = self.loss_fn.compute_residual(x0_preds).mean().abs()
-        self.log("val_darcy_residual", darcy_res, prog_bar=True, on_epoch=True, sync_dist=True)
+        metrics = self.cfg.dataset.validation_metrics
+        for metric_name in metrics:
+            if metric_name == "darcy":
+                with torch.no_grad():
+                    x0_preds = self.sample_loop(batch_size=16)
+                    darcy_res = self.loss_fn.compute_residual(x0_preds).mean().abs()
+                self.log("val_darcy_residual", darcy_res, prog_bar=True, on_epoch=True, sync_dist=True)
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.hp_config.lr, weight_decay=self.hp_config.weight_decay)
