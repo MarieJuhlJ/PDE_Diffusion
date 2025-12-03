@@ -1,5 +1,9 @@
 import random
 import string
+import numpy as np
+import torch
+import torch.nn.functional as F
+import pde_diff.data.const as const
 from types import SimpleNamespace
 
 _ALPHABET = string.ascii_lowercase
@@ -120,3 +124,112 @@ def dict_to_namespace(d):
         return [dict_to_namespace(v) for v in d]
     else:
         return d
+
+def init_means_and_stds_era5(atmospheric_features, single_features, static_features):
+    # TODO: Handle missing features more gracefully aka actually implement them
+    means = []
+    stds = []
+    diff_means = []
+    diff_stds = []
+
+    for var in atmospheric_features:
+        try:
+            means.extend(const.ERA5_MEANS[var])
+            stds.extend(const.ERA5_STD[var])
+            diff_means.extend(const.ERA5_DIFF_MEAN[var])
+            diff_stds.extend(const.ERA5_DIFF_STD[var])
+        except:
+            means.extend(np.array([0.0,0.0]))
+            stds.extend(np.array([1.0,1.0]))
+            diff_means.extend(np.array([0.0,1.0]))
+            diff_stds.extend(np.array([1.0,1.0]))
+
+    for var in single_features:
+        try:
+            means.append(const.ERA5_MEANS[var])
+            stds.append(const.ERA5_STD[var])
+            diff_means.append(const.ERA5_DIFF_MEAN[var])
+            diff_stds.append(const.ERA5_DIFF_STD[var])
+        except:
+            means.append(np.array([0.0,0.0]))
+            stds.append(np.array([1.0,1.0]))
+            diff_means.append(np.array([0.0,0.0]))
+            diff_stds.append(np.array([1.0,1.0]))
+
+    for var in static_features:
+        try:
+            means.append(const.ERA5_MEANS[var])
+            stds.append(const.ERA5_STD[var])
+        except:
+            means.append(np.array([0.0,0.0]))
+            stds.append(np.array([1.0,1.0]))
+
+    return (
+        np.array(means).astype(np.float32),
+        np.array(stds).astype(np.float32),
+        np.array(diff_means).astype(np.float32),
+        np.array(diff_stds).astype(np.float32),
+    )
+
+class GradientHelper:
+    def __init__(self, grid_distances):
+        self.grid_distances = grid_distances
+
+    def d_in_dx(self, input):
+        b, lev, lon, lat = input.shape
+        
+        inp = F.pad(input, (0, 0, 1, 1), mode='circular')
+
+        kernel = torch.tensor([-1, 0, 1], dtype=input.dtype, device=input.device) / 2.0
+        kernel = kernel.view(1, 1, 3, 1)
+
+        dx = F.conv2d(
+            inp.view(b * lev, 1, lon + 2, lat),
+            kernel,
+            padding=0,
+        )
+        dx = dx.view(b, lev, lon, lat)
+        return dx / self.grid_distances['dx']
+
+    def d_in_dy(self, input):
+        b, lev, lon, lat = input.shape
+
+        inp = F.pad(input, (1, 1, 0, 0), mode='circular')
+
+        kernel = torch.tensor([-1, 0, 1], dtype=input.dtype, device=input.device) / 2.0
+        kernel = kernel.view(1, 1, 1, 3)
+
+        dy = F.conv2d(
+            inp.view(b * lev, 1, lon, lat + 2),
+            kernel,
+            padding=0,
+        )
+        dy = dy.view(b, lev, lon, lat)
+        return dy / self.grid_distances['dy']
+
+    def laplacian_horizontal(self, input):
+        d2_dx2 = self.d_in_dx(self.d_in_dx(input)) * self.grid_distances["dx"]
+        d2_dy2 = self.d_in_dy(self.d_in_dy(input)) * self.grid_distances["dy"]
+        return d2_dx2 + d2_dy2
+
+    def gradient_horizontal(self, input):
+        dx = self.d_in_dx(input)
+        dy = self.d_in_dy(input)
+        return dx, dy
+
+if __name__ == "__main__":
+    random_point = torch.randn(1, 3, 480, 32)
+
+    grid_distances = {
+        'dx': torch.ones_like(random_point),
+        'dy': torch.ones_like(random_point),
+    }
+
+    gh = GradientHelper(grid_distances)
+
+    dx = gh.d_in_dx(random_point)
+    dy = gh.d_in_dy(random_point)
+    lap = gh.laplacian_horizontal(random_point)
+    gradx, grady = gh.gradient_horizontal(random_point)
+
+    print(dx.shape, dy.shape, lap.shape, gradx.shape, grady.shape)

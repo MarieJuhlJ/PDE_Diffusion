@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import einops
 from omegaconf import DictConfig
-from pde_diff.utils import DatasetRegistry
+from pde_diff.utils import DatasetRegistry, init_means_and_stds_era5
 import xarray as xr
 
 import pde_diff.data.const as const
@@ -157,53 +157,9 @@ class ERA5Dataset(Dataset):
 
         self.normalization_on = cfg.get("normalize", True)
         if self.normalization_on:
-            self.means, self.stds, self.diff_means, self.diff_stds = self._init_means_and_stds()
-
-    def _init_means_and_stds(self):
-        # TODO: Handle missing features more gracefully aka actually implement them
-        means = []
-        stds = []
-        diff_means = []
-        diff_stds = []
-
-        for var in self.atmospheric_features:
-            try:
-                means.extend(const.ERA5_MEANS[var])
-                stds.extend(const.ERA5_STD[var])
-                diff_means.extend(const.ERA5_DIFF_MEAN[var])
-                diff_stds.extend(const.ERA5_DIFF_STD[var])
-            except:
-                means.extend(np.array([0.0,0.0]))
-                stds.extend(np.array([1.0,1.0]))
-                diff_means.extend(np.array([0.0,1.0]))
-                diff_stds.extend(np.array([1.0,1.0]))
-
-        for var in self.single_features:
-            try:
-                means.append(const.ERA5_MEANS[var])
-                stds.append(const.ERA5_STD[var])
-                diff_means.append(const.ERA5_DIFF_MEAN[var])
-                diff_stds.append(const.ERA5_DIFF_STD[var])
-            except:
-                means.append(np.array([0.0,0.0]))
-                stds.append(np.array([1.0,1.0]))
-                diff_means.append(np.array([0.0,0.0]))
-                diff_stds.append(np.array([1.0,1.0]))
-
-        for var in self.static_features:
-            try:
-                means.append(const.ERA5_MEANS[var])
-                stds.append(const.ERA5_STD[var])
-            except:
-                means.append(np.array([0.0,0.0]))
-                stds.append(np.array([1.0,1.0]))
-
-        return (
-            np.array(means).astype(np.float32),
-            np.array(stds).astype(np.float32),
-            np.array(diff_means).astype(np.float32),
-            np.array(diff_stds).astype(np.float32),
-        )
+            self.means, self.stds, self.diff_means, self.diff_stds = init_means_and_stds_era5(self.atmospheric_features,
+                                                                                              self.single_features,
+                                                                                              self.static_features)
 
     def _normalize(self, data, means, stds):
         return (data - means[:, None, None]) / (stds[:, None, None] + 0.0001)

@@ -6,7 +6,7 @@ import lightning as pl
 from torch.utils.data import DataLoader
 from omegaconf import DictConfig, OmegaConf
 
-from pde_diff.utils import DatasetRegistry, CallbackRegistry, unique_id
+from pde_diff.utils import DatasetRegistry, LossRegistry, unique_id
 from pde_diff.model import DiffusionModel
 from pde_diff.callbacks import SaveBestModel
 import pde_diff.callbacks
@@ -20,8 +20,8 @@ def train(cfg: DictConfig):
     cfg.id = unique_id(length=5) if cfg.id == None else cfg.id
     cfg.model.dims = cfg.dataset.dims
 
-    model = DiffusionModel(cfg)
     dataset = DatasetRegistry.create(cfg.dataset)
+    model = DiffusionModel(cfg)
 
     dataset_train, dataset_val = split_dataset(cfg, dataset)
 
@@ -48,7 +48,7 @@ def train(cfg: DictConfig):
         callbacks=[SaveBestModel()]
     )
 
-    #model.training_step(next(iter(train_dataloader)), 0)  # Test run of training step
+    print(f"Starting training of model {cfg.id}")
     trainer.fit(model, train_dataloader, val_dataloader)
     print(f"Training completed of model {cfg.id}")
 
