@@ -1,7 +1,9 @@
 import random
 import string
+import numpy as np
 import torch
 import torch.nn.functional as F
+import pde_diff.data.const as const
 from types import SimpleNamespace
 
 _ALPHABET = string.ascii_lowercase
@@ -123,6 +125,52 @@ def dict_to_namespace(d):
     else:
         return d
 
+def init_means_and_stds_era5(atmospheric_features, single_features, static_features):
+    # TODO: Handle missing features more gracefully aka actually implement them
+    means = []
+    stds = []
+    diff_means = []
+    diff_stds = []
+
+    for var in atmospheric_features:
+        try:
+            means.extend(const.ERA5_MEANS[var])
+            stds.extend(const.ERA5_STD[var])
+            diff_means.extend(const.ERA5_DIFF_MEAN[var])
+            diff_stds.extend(const.ERA5_DIFF_STD[var])
+        except:
+            means.extend(np.array([0.0,0.0]))
+            stds.extend(np.array([1.0,1.0]))
+            diff_means.extend(np.array([0.0,1.0]))
+            diff_stds.extend(np.array([1.0,1.0]))
+
+    for var in single_features:
+        try:
+            means.append(const.ERA5_MEANS[var])
+            stds.append(const.ERA5_STD[var])
+            diff_means.append(const.ERA5_DIFF_MEAN[var])
+            diff_stds.append(const.ERA5_DIFF_STD[var])
+        except:
+            means.append(np.array([0.0,0.0]))
+            stds.append(np.array([1.0,1.0]))
+            diff_means.append(np.array([0.0,0.0]))
+            diff_stds.append(np.array([1.0,1.0]))
+
+    for var in static_features:
+        try:
+            means.append(const.ERA5_MEANS[var])
+            stds.append(const.ERA5_STD[var])
+        except:
+            means.append(np.array([0.0,0.0]))
+            stds.append(np.array([1.0,1.0]))
+
+    return (
+        np.array(means).astype(np.float32),
+        np.array(stds).astype(np.float32),
+        np.array(diff_means).astype(np.float32),
+        np.array(diff_stds).astype(np.float32),
+    )
+
 class GradientHelper:
     def __init__(self, grid_distances):
         self.grid_distances = grid_distances
@@ -132,7 +180,7 @@ class GradientHelper:
         
         inp = F.pad(input, (0, 0, 1, 1), mode='circular')
 
-        kernel = torch.tensor([1, 0, -1], dtype=input.dtype, device=input.device) / 2.0
+        kernel = torch.tensor([-1, 0, 1], dtype=input.dtype, device=input.device) / 2.0
         kernel = kernel.view(1, 1, 3, 1)
 
         dx = F.conv2d(
@@ -148,7 +196,7 @@ class GradientHelper:
 
         inp = F.pad(input, (1, 1, 0, 0), mode='circular')
 
-        kernel = torch.tensor([1, 0, -1], dtype=input.dtype, device=input.device) / 2.0
+        kernel = torch.tensor([-1, 0, 1], dtype=input.dtype, device=input.device) / 2.0
         kernel = kernel.view(1, 1, 1, 3)
 
         dy = F.conv2d(

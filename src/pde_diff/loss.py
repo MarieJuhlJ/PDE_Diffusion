@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 import einops as ein
 import math
+from omegaconf import ListConfig
 from pde_diff.utils import LossRegistry, DatasetRegistry, GradientHelper
 from pde_diff.grad_utils import *
 from pde_diff import data
@@ -14,15 +15,14 @@ class PDE_loss(nn.Module):
         self.mse = nn.MSELoss(reduction='none')
         self.residual_fns = residual_fns
         self.c_data = None
-        if self.cfg.c_residual:
-            if type(self.cfg.c_residual) == list:
-                self.c_residuals = self.cfg.c_residual
+
+        if self.cfg.c_residual is not None:
+            if isinstance(self.cfg.c_residual, (list, ListConfig)):
+                self.c_residuals = list(self.cfg.c_residual)
             else:
                 self.c_residuals = [self.cfg.c_residual for _ in residual_fns]
         else:
-            self.c_residuals = [0.0 for _ in residual_fns]
-
-        
+            self.c_residuals = [0.0 for _ in residual_fns]        
 
     def residual_loss(self, x0_hat, var, residual_fn):
         if self.cfg.name == 'vorticity':
@@ -281,12 +281,12 @@ class VorticityLoss(PDE_loss):
         kappa = self.R / self.c_p
         return (self.R * self.T_0 * kappa) / (p**2)
 
-    def get_original_states(self, x0_previous, x0_pred):
+    def get_original_states(self, x0_previous, x0_pred_change):
         previous_states_unnormalized = (x0_previous * self.std[None, :, None, None]) + self.mean[None, :, None, None]
-        current_state_unnormalized = (x0_pred * self.diff_std[None, :, None, None]) + self.mean[None, :, None, None]
+        current_state_change_unnormalized = (x0_pred_change * self.diff_std[None, :, None, None]) + self.diff_mean[None, :, None, None]
         previous_state = ein.rearrange(previous_states_unnormalized, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
-        current_state = ein.rearrange(current_state_unnormalized, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
-        return previous_state, current_state
+        current_state_change = ein.rearrange(current_state_change_unnormalized, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
+        return previous_state, current_state_change+previous_state
 
     def compute_residual_geostrophic_wind(self, x0_previous, x0_change_pred):
         """
@@ -298,7 +298,7 @@ class VorticityLoss(PDE_loss):
         """
         device = x0_change_pred.device
         dtype = x0_change_pred.dtype
-        previous, current = self.get_original_states(x0_previous, x0_change_pred + x0_previous)
+        previous, current = self.get_original_states(x0_previous, x0_change_pred)
 
         wind_u_p, wind_v_p, pv_p, temp_p, geo_p = [previous[:, :, i] for i in range(5)]
         wind_u_c, wind_v_c, pv_c, temp_c, geo_c = [current[:, :, i] for i in range(5)]
@@ -319,7 +319,7 @@ class VorticityLoss(PDE_loss):
         """
         device = x0_change_pred.device
         dtype = x0_change_pred.dtype
-        previous, current = self.get_original_states(x0_previous, x0_change_pred + x0_previous)
+        previous, current = self.get_original_states(x0_previous, x0_change_pred)
 
         wind_u_p, wind_v_p, pv_p, temp_p, geo_p = [previous[:, :, i] for i in range(5)]
         wind_u_c, wind_v_c, pv_c, temp_c, geo_c = [current[:, :, i] for i in range(5)]
@@ -343,7 +343,7 @@ class VorticityLoss(PDE_loss):
         """
         device = x0_change_pred.device
         dtype = x0_change_pred.dtype
-        previous, current = self.get_original_states(x0_previous, x0_change_pred + x0_previous)
+        previous, current = self.get_original_states(x0_previous, x0_change_pred)
 
         wind_u_p, wind_v_p, pv_p, temp_p, geo_p = [previous[:, :, i] for i in range(5)]
         wind_u_c, wind_v_c, pv_c, temp_c, geo_c = [current[:, :, i] for i in range(5)]

@@ -20,12 +20,7 @@ def train(cfg: DictConfig):
     cfg.model.dims = cfg.dataset.dims
 
     dataset = DatasetRegistry.create(cfg.dataset)
-    loss_fn = LossRegistry.create(cfg.loss)
-    if cfg.dataset.name == 'era5' and cfg.loss.name == 'vorticity': #semi cursed (TODO clean up)
-        loss_fn.set_mean_and_std(dataset.means, dataset.stds,
-                              dataset.diff_means, dataset.diff_stds)
-
-    model = DiffusionModel(cfg, loss_fn)
+    model = DiffusionModel(cfg)
 
     if cfg.get("k_folds", None):
         # Create a split and select appropriate subset of data for this fold:

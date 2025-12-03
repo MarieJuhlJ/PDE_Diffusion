@@ -8,19 +8,28 @@ from pathlib import Path
 from pde_diff.data.datasets import increment_clock_features
 
 # Imports for registries
-from pde_diff.utils import SchedulerRegistry, LossRegistry, ModelRegistry
+from pde_diff.utils import SchedulerRegistry, LossRegistry, ModelRegistry, init_means_and_stds_era5
 import pde_diff.scheduler
 import pde_diff.loss
 from pde_diff.data import datasets
 
 
 class DiffusionModel(pl.LightningModule):
-    def __init__(self, cfg, loss_fn):
+    def __init__(self, cfg):
         super().__init__()
         self.model = ModelRegistry.create(cfg.model)
         self.scheduler = SchedulerRegistry.create(cfg.scheduler)
+        self.atmospheric_features = cfg.dataset.atmospheric_features
+        self.single_features = cfg.dataset.single_features
+        self.static_features = cfg.dataset.static_features
+        self.means, self.stds, self.diff_means, self.diff_stds = init_means_and_stds_era5(self.atmospheric_features,
+                                                                                              self.single_features,
+                                                                                              self.static_features)
+        self.loss_fn = LossRegistry.create(cfg.loss)
         self.hp_config = cfg.experiment.hyperparameters
-        self.loss_fn = loss_fn
+        if cfg.dataset.name == 'era5' and cfg.loss.name == 'vorticity': #semi cursed (TODO clean up)
+            self.loss_fn.set_mean_and_std(self.means, self.stds, self.diff_means, self.diff_stds)
+
         self.data_dims = cfg.dataset.dims
 
         self.conditional = cfg.dataset.time_series # Add conditional flag
@@ -91,8 +100,12 @@ class DiffusionModel(pl.LightningModule):
                 num_channels = x0_hat.shape[1]
                 x0_previous = x0_hat[:, :num_channels//2, :, :]
                 x0_change_pred = x0_hat[:, num_channels//2:, :, :]
-                residual = self.loss_fn.compute_residual(x0_previous, x0_change_pred).pow(2).mean()
-                self.log("val_era5_vorticity_residual", residual, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
+                residual_planetary = self.loss_fn.compute_residual_planetary_vorticity(x0_previous, x0_change_pred).pow(2).mean()
+                residual_geo_wind = self.loss_fn.compute_residual_geostrophic_wind(x0_previous, x0_change_pred).pow(2).mean()
+                residual_qgpv = self.loss_fn.compute_residual_qgpv(x0_previous, x0_change_pred).pow(2).mean()
+                self.log("val_era5_planetary_residual", residual_planetary, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
+                self.log("val_era5_geo_wind_residual", residual_geo_wind, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
+                self.log("val_era5_qgpv_residual", residual_qgpv, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
 
 
     def on_validation_epoch_end(self):
