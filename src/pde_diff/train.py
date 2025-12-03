@@ -3,18 +3,19 @@ import hydra
 import torch
 
 import lightning as pl
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader
 from omegaconf import DictConfig, OmegaConf
-from sklearn.model_selection import KFold
 
 from pde_diff.utils import DatasetRegistry, CallbackRegistry, unique_id
 from pde_diff.model import DiffusionModel
 from pde_diff.callbacks import SaveBestModel
 import pde_diff.callbacks
-import pde_diff.data.datasets
+from pde_diff.data.utils import split_dataset
 
 @hydra.main(version_base=None, config_name="config.yaml", config_path="../../configs")
 def train(cfg: DictConfig):
+    pl.seed_everything(cfg.seed)
+
     hp_config =cfg.experiment.hyperparameters
     cfg.id = unique_id(length=5) if cfg.id == None else cfg.id
     cfg.model.dims = cfg.dataset.dims
@@ -22,23 +23,7 @@ def train(cfg: DictConfig):
     model = DiffusionModel(cfg)
     dataset = DatasetRegistry.create(cfg.dataset)
 
-    if cfg.get("k_folds", None):
-        # Create a split and select appropriate subset of data for this fold:
-        kf = KFold(n_splits=cfg.k_folds, shuffle=True, random_state=cfg.seed)
-        train_idx, val_idx = list(kf.split(dataset_train))[cfg.idx_fold-1]
-        print(f"Training fold {cfg.idx_fold + 1}/{cfg.k_folds}")
-        dataset_val = Subset(dataset_train, val_idx)
-        dataset_train = Subset(dataset_train, train_idx)
-    else:
-        # Split dataset into train and validation sets
-        val_size = int(len(dataset) * 0.1)
-        train_size = len(dataset) - val_size
-        if cfg.dataset.time_series:
-            # Offset the train and validation set by one to avoid data leakage in time series datasets (each item contains 3 timesteps)
-            dataset_train = Subset(dataset, range(train_size-1))
-            dataset_val = Subset(dataset, range(train_size+1, len(dataset)))
-        else:
-            dataset_train, dataset_val = torch.utils.data.random_split(dataset, [train_size, val_size])
+    dataset_train, dataset_val = split_dataset(cfg, dataset)
 
     train_dataloader = DataLoader(dataset_train, batch_size=hp_config.batch_size, shuffle=True, num_workers=4,persistent_workers=True)
     val_dataloader = DataLoader(dataset_val, batch_size=hp_config.batch_size, shuffle=False, num_workers=4,persistent_workers=True)
@@ -53,7 +38,6 @@ def train(cfg: DictConfig):
     else:
         os.makedirs("logs", exist_ok=True)
         logger = pl.pytorch.loggers.CSVLogger("logs", name=wandb_name)
-
 
     trainer = pl.Trainer(
         accelerator=acc,
