@@ -100,7 +100,7 @@ def plot_and_save_era5(csv_path, out_dir):
 
 if __name__ == "__main__":
     model_path = Path('./models')
-    model_id = 'exp1-auxcy'
+    model_id = 'exp1-xbvcn'
 
     cfg = OmegaConf.load(model_path / model_id / "config.yaml")
 

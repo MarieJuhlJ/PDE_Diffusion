@@ -13,7 +13,7 @@ save_dir: 'models/'
 
 loss:
   name: mse
-  c_residual: 1e-3
+  c_residual: null
 
 model:
   name: unet2d

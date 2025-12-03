@@ -14,7 +14,27 @@ class PDE_loss(nn.Module):
         self.mse = nn.MSELoss(reduction='none')
         self.residual_fns = residual_fns
         self.c_data = None
-        self.c_residuals = [self.cfg.c_residual for _ in residual_fns]
+        if self.cfg.c_residual:
+            if type(self.cfg.c_residual) == list:
+                self.c_residuals = self.cfg.c_residual
+            else:
+                self.c_residuals = [self.cfg.c_residual for _ in residual_fns]
+        else:
+            self.c_residuals = [0.0 for _ in residual_fns]
+
+        
+
+    def residual_loss(self, x0_hat, var, residual_fn):
+        if self.cfg.name == 'vorticity':
+            num_channels = x0_hat.shape[1]
+            x0_previous = x0_hat[:, :num_channels//2, :, :]
+            x0_change_pred = x0_hat[:, num_channels//2:, :, :]
+            residual = residual_fn(x0_previous, x0_change_pred)
+        else:
+            residual = residual_fn(x0_hat)
+        residual_log_likelihood = gaussian_log_likelihood(torch.zeros_like(residual), means=residual, variance=var)
+        residual_loss = -1. * residual_log_likelihood
+        return residual_loss.mean()
 
     def forward(self, model_out, target, **kwargs):
         x0_hat = kwargs.get('x0_hat', None)
@@ -27,7 +47,7 @@ class PDE_loss(nn.Module):
 
         for fn, w in zip(self.residual_fns, self.c_residuals):
             if w > 0:
-                r = fn(x0_hat, var)
+                r = self.residual_loss(x0_hat, var, fn)
                 total += + w * r
         return total
 
@@ -47,7 +67,7 @@ class MSE(nn.Module):
 @LossRegistry.register("darcy")
 class DarcyLoss(PDE_loss):
     def __init__(self, cfg):
-        residual_fns = [self.darcy_residual_loss]
+        residual_fns = [self.compute_residual]
         self.cfg = cfg
         self.eps = 1e-8
         self.eps_K = 1e-6
@@ -92,12 +112,6 @@ class DarcyLoss(PDE_loss):
         f = self.darcy_source(H, W, r=10.0, w_frac=0.125, device=x.device, dtype=x.dtype)
         f = f.unsqueeze(0).expand(B, -1, -1)
         return div_K_grad_p + f
-
-    def darcy_residual_loss(self, x0_hat, var):
-        residual = self.compute_residual(x0_hat)
-        residual_log_likelihood = gaussian_log_likelihood(torch.zeros_like(residual), means=residual, variance=var)
-        residual_loss = -1. * residual_log_likelihood
-        return residual_loss.mean()
 
     def create_trapezoidal_weights(self):
         # identify corner nodes
@@ -168,7 +182,9 @@ class DarcyLoss(PDE_loss):
 @LossRegistry.register("vorticity")
 class VorticityLoss(PDE_loss):
     def __init__(self, cfg):
-        residual_fns = [self.vorticity_residual_loss]
+        residual_fns = [self.compute_residual_planetary_vorticity,
+                        self.compute_residual_geostrophic_wind,
+                        self.compute_residual_qgpv]
         self.cfg = cfg
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -182,11 +198,23 @@ class VorticityLoss(PDE_loss):
         self.lon_range = [0, 359] # hardcoded for now
         self.p = [45000, 50000, 55000] # (Pa) hardcoded for now
         self.dp = 5000 # (Pa) hardcoded for now
+        self.dt = 3600 # (s) hardcoded for now
+
+        nlat = 32  # hardcoded for now
+        nlon = 480  # hardcoded for now
+
+        lats_deg = torch.linspace(self.lat_range[0],
+                                  self.lat_range[1],
+                                  nlat, device=self.device)
+        phi = lats_deg * math.pi / 180.0
+        phi0 = phi.mean()
+        self.f = 2.0 * self.Omega * torch.sin(phi)[None, None, None, :]
+        self.f0 = 2.0 * self.Omega * torch.sin(phi0)
 
         lon_grid, lat_grid, dx_grid, dy_grid = self.make_distance_grids(
-            nlon=480, # hardcoded for now
+            nlon=nlon,
             lon_range=self.lon_range,
-            nlat=32, # hardcoded for now
+            nlat=nlat,
             lat_range=self.lat_range,
             device=self.device,
             dtype=torch.float32,
@@ -212,7 +240,7 @@ class VorticityLoss(PDE_loss):
         dy_grid = self.haversine(lon_grid, lat_grid, lon_e, lat_e)
 
         return lon_grid, lat_grid, dx_grid, dy_grid
-    
+
     def haversine(self, lon1, lat1, lon2, lat2):
             lon1 = torch.deg2rad(lon1)
             lat1 = torch.deg2rad(lat1)
@@ -230,7 +258,6 @@ class VorticityLoss(PDE_loss):
 
             return self.a * c
 
-
     def set_mean_and_std(self, mean, std, diff_mean, diff_std):
         device = self.device
 
@@ -241,19 +268,18 @@ class VorticityLoss(PDE_loss):
 
     def theta_0(self, p):
         return self.T_0 * (self.p_0 / p)**(self.R / self.c_p)
-    
+
     def dx_dp(self, x):
         return ((x[:, -1] - x [:, 0]) / (self.dp * 2))
-    
+
     def dxx_dpp(self, x):
         diff_1 = (x[:, 1] - x[:, 0]) / self.dp
         diff_2 = (x [:, 2] - x[:, 1]) / self.dp
         return ((diff_2 - diff_1)/self.dp)
-    
+
     def sigma(self, p):
         kappa = self.R / self.c_p
         return (self.R * self.T_0 * kappa) / (p**2)
-
 
     def get_original_states(self, x0_previous, x0_pred):
         previous_states_unnormalized = (x0_previous * self.std[None, :, None, None]) + self.mean[None, :, None, None]
@@ -262,7 +288,35 @@ class VorticityLoss(PDE_loss):
         current_state = ein.rearrange(current_state_unnormalized, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
         return previous_state, current_state
 
-    def compute_residual(self, x0_previous, x0_change_pred):
+    def compute_residual_geostrophic_wind(self, x0_previous, x0_change_pred):
+        """
+        Residual of Holton eq. 6.66
+        
+        :param self: Description
+        :param x0_previous: Description
+        :param x0_change_pred: Description
+        """
+        device = x0_change_pred.device
+        dtype = x0_change_pred.dtype
+        previous, current = self.get_original_states(x0_previous, x0_change_pred + x0_previous)
+
+        wind_u_p, wind_v_p, pv_p, temp_p, geo_p = [previous[:, :, i] for i in range(5)]
+        wind_u_c, wind_v_c, pv_c, temp_c, geo_c = [current[:, :, i] for i in range(5)]
+
+        dphi_dx_c, dphi_dy_c = self.gradient_helper.gradient_horizontal(geo_c)
+        wind_geo_u_c = - dphi_dy_c / self.f0
+        wind_geo_v_c = dphi_dx_c / self.f0
+        residual = wind_geo_u_c - wind_u_c + wind_geo_v_c - wind_v_c
+        return residual
+
+    def compute_residual_planetary_vorticity(self, x0_previous, x0_change_pred):
+        """
+        Residual of Holton eq. 6.66
+        
+        :param self: Description
+        :param x0_previous: Description
+        :param x0_change_pred: Description
+        """
         device = x0_change_pred.device
         dtype = x0_change_pred.dtype
         previous, current = self.get_original_states(x0_previous, x0_change_pred + x0_previous)
@@ -270,22 +324,36 @@ class VorticityLoss(PDE_loss):
         wind_u_p, wind_v_p, pv_p, temp_p, geo_p = [previous[:, :, i] for i in range(5)]
         wind_u_c, wind_v_c, pv_c, temp_c, geo_c = [current[:, :, i] for i in range(5)]
         
-        b, lev, nlon, nlat = geo_c.shape
+        dphi_dx_c, dphi_dy_c = self.gradient_helper.gradient_horizontal(geo_c)
+        wind_geo_u_c = - dphi_dy_c / self.f0
+        wind_geo_v_c = dphi_dx_c / self.f0
+        wind_nabla_dot = wind_geo_u_c + wind_geo_v_c
+        dpv_dt = (pv_c - pv_p) / self.dt
+        residual = dpv_dt + wind_nabla_dot * pv_c
+        return residual
 
-        lats_deg = torch.linspace(self.lat_range[0],
-                                  self.lat_range[1],
-                                  nlat, device=device, dtype=dtype)
-        phi = lats_deg * math.pi / 180.0
-        f = 2.0 * self.Omega * torch.sin(phi)[None, None, None, :]
-        phi0 = phi.mean()
-        f0 = 2.0 * self.Omega * torch.sin(phi0)
+
+    def compute_residual_qgpv(self, x0_previous, x0_change_pred):
+        """
+        Residual of Holton eq. 6.66
+        
+        :param self: Description
+        :param x0_previous: Description
+        :param x0_change_pred: Description
+        """
+        device = x0_change_pred.device
+        dtype = x0_change_pred.dtype
+        previous, current = self.get_original_states(x0_previous, x0_change_pred + x0_previous)
+
+        wind_u_p, wind_v_p, pv_p, temp_p, geo_p = [previous[:, :, i] for i in range(5)]
+        wind_u_c, wind_v_c, pv_c, temp_c, geo_c = [current[:, :, i] for i in range(5)]
 
         p = torch.tensor(self.p, device=device, dtype=dtype)[None, :, None, None]
         sigma = self.sigma(p)
         lap_geo = self.gradient_helper.laplacian_horizontal(geo_c)
-        A = f0 / sigma
+        A = self.f0 / sigma
         term_vert = self.dx_dp(A) * self.dx_dp(geo_c) + A[:,1] * self.dxx_dpp(geo_c)
-        residual = (1/f0 * lap_geo + f)[:,1] + term_vert - pv_c[:, 1] # Holton 6.66
+        residual = (1/self.f0 * lap_geo + self.f)[:,1] + term_vert - pv_c[:, 1] # Holton 6.66
         return residual
     
     def vorticity_residual_loss(self, x0_hat, var):
@@ -364,20 +432,31 @@ if __name__ == "__main__":
                           dataset.diff_means, dataset.diff_stds)
     loss.device = torch.device("cpu")
 
-    batch = next(iter(loader))   # <--- THIS is what you want
+    batch = next(iter(loader)) # <--- THIS is what you want
     x = batch[0]
     y = batch[1]
-    previous = x[:, 19:34]       # keep batch dim, slice second dim
+    previous = x[:, 19:34] # keep batch dim, slice second dim
     current = y
 
-    r_era5 = loss.compute_residual(previous, current).pow(2).mean()
+    r_era5_pv = loss.compute_residual_planetary_vorticity(previous, current).pow(2).mean()
+    r_era5_qgpv = loss.compute_residual_qgpv(previous, current).pow(2).mean()
+    r_era5_geo_wind = loss.compute_residual_geostrophic_wind(previous, current).pow(2).mean()
     mean = previous.mean(dim=(0,2,3), keepdim=True)
     std  = previous.std(dim=(0,2,3), keepdim=True)
 
     random_prev = torch.randn_like(previous)
     random_curr = torch.randn_like(current)
-    r_rand = loss.compute_residual(random_prev, random_curr).pow(2).mean()
+    r_rand_pv = loss.compute_residual_planetary_vorticity(random_prev, random_curr).pow(2).mean()
+    r_rand_qgpv = loss.compute_residual_qgpv(random_prev, random_curr).pow(2).mean()
+    r_rand_geo_wind = loss.compute_residual_geostrophic_wind(random_prev, random_curr).pow(2).mean()
 
-    print("ERA5 residual:", r_era5.item())
-    print("Random residual:", r_rand.item())
-
+    print("_______________")
+    print("ERA5 residual planetary:", r_era5_pv.item())
+    print("Random residual planetary:", r_rand_pv.item())
+    print("_______________")
+    print("ERA5 residual qgpv:", r_era5_qgpv.item())
+    print("Random residual qgpv:", r_rand_qgpv.item())
+    print("_______________")
+    print("ERA5 residual geo wind:", r_era5_geo_wind.item())
+    print("Random residual geo wind:", r_rand_geo_wind.item())
+    
