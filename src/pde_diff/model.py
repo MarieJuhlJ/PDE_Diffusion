@@ -19,15 +19,15 @@ class DiffusionModel(pl.LightningModule):
         super().__init__()
         self.model = ModelRegistry.create(cfg.model)
         self.scheduler = SchedulerRegistry.create(cfg.scheduler)
-        self.atmospheric_features = cfg.dataset.atmospheric_features
-        self.single_features = cfg.dataset.single_features
-        self.static_features = cfg.dataset.static_features
-        self.means, self.stds, self.diff_means, self.diff_stds = init_means_and_stds_era5(self.atmospheric_features,
-                                                                                              self.single_features,
-                                                                                              self.static_features)
         self.loss_fn = LossRegistry.create(cfg.loss)
         self.hp_config = cfg.experiment.hyperparameters
         if cfg.dataset.name == 'era5' and cfg.loss.name == 'vorticity': #semi cursed (TODO clean up)
+            self.atmospheric_features = cfg.dataset.atmospheric_features
+            self.single_features = cfg.dataset.single_features
+            self.static_features = cfg.dataset.static_features
+            self.means, self.stds, self.diff_means, self.diff_stds = init_means_and_stds_era5(self.atmospheric_features,
+                                                                                              self.single_features,
+                                                                                              self.static_features)
             self.loss_fn.set_mean_and_std(self.means, self.stds, self.diff_means, self.diff_stds)
 
         self.data_dims = cfg.dataset.dims
