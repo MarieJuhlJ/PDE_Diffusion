@@ -21,6 +21,6 @@ static_features: []
 max_year: 2024
 time_step: 2
 
-"lon_range": null # Data is full range
-"lat_range": null # Already subsampled to [70, 46]
+"lon_range": null # [0, 50]
+"lat_range": [70, 46]
 "downsample_factor": 3

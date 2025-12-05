@@ -1,6 +1,6 @@
 defaults:
   - experiment: exp1
-  - dataset: cifar10
+  - dataset: era5
   - scheduler: ddpm
   - _self_
 

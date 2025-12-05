@@ -449,8 +449,8 @@ def increment_clock_features(clock_features: torch.Tensor, step_size: int) -> to
     Increment clock features by a given hourly step size using PyTorch.
     """
     # Extract the day and time and compute their angles
-    sin_day_of_year, cos_day_of_year = clock_features[..., 0], clock_features[..., 1]
-    sin_local_mean_time, cos_local_mean_time = clock_features[..., 2], clock_features[..., 3]
+    sin_day_of_year, cos_day_of_year = clock_features[:, 0,:,:], clock_features[:, 1,:,:]
+    sin_local_mean_time, cos_local_mean_time = clock_features[:, 2,:,:], clock_features[:, 3,:,:]
     day_of_year_angle = torch.atan2(sin_day_of_year, cos_day_of_year)
     local_mean_time_angle = torch.atan2(sin_local_mean_time, cos_local_mean_time)
 
@@ -466,7 +466,7 @@ def increment_clock_features(clock_features: torch.Tensor, step_size: int) -> to
     cos_local_mean_time = torch.cos(local_mean_time_angle)
 
     updated_clock_features = torch.stack(
-        [sin_day_of_year, cos_day_of_year, sin_local_mean_time, cos_local_mean_time], dim=-1
+        [sin_day_of_year, cos_day_of_year, sin_local_mean_time, cos_local_mean_time], dim=1
     )
     return updated_clock_features
 
