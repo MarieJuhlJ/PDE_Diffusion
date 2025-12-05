@@ -286,20 +286,48 @@ def visualize_time_series(dataset, variable, level=500, dir=Path("./reports/figu
     plt.savefig(plot_path, bbox_inches='tight', pad_inches=0.05)
     print(f"Saved time series plot to {plot_path}")
 
+def plot_and_save_era5(csv_path, out_dir):
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    df = pd.read_csv(csv_path).apply(pd.to_numeric, errors="ignore").dropna(subset=["step"])
+    df = df.sort_values("step")
+
+    # ---- Loss plot ----
+    train_df = df.dropna(subset=["train_loss"])
+    val_df = df.dropna(subset=["val_loss"])
+    
+    plt.plot(train_df.epoch, train_df.train_loss, label="train_loss")
+    plt.plot(val_df.epoch, val_df.val_loss, label="val_loss")
+    plt.legend(); plt.grid(); plt.title("Loss")
+    plt.savefig(out_dir / "loss.png"); plt.clf()
+
+    res_df = df.dropna(subset=["val_era5_vorticity_residual"])
+    mse_df = df.dropna(subset=["val_mse_(weighted)"])
+
+    # ---- Residual + MSE plot ----
+    plt.plot(res_df.epoch, res_df.val_era5_vorticity_residual, label="era5_residual")
+    plt.plot(mse_df.epoch, mse_df["val_mse_(weighted)"], label="mse_weighted")
+    plt.legend(); plt.grid(); plt.title("Residuals & MSE")
+    plt.savefig(out_dir / "residuals.png"); plt.clf()
+
+    return
+
 
 if __name__ == "__main__":
-    #model_path = Path('./models')
-    #model_id = 'exp1-ihnrf'
+#     model_path = Path('./models')
+#     model_id = 'exp1-xbvcn'
 
-    #plot_training_metrics(model_id)
+#     cfg = OmegaConf.load(model_path / model_id / "config.yaml")
 
-    #with open(model_path / model_id / 'config.yaml', 'r') as f:
-    #    cfg = yaml.safe_load(f)
-    #cfg = dict_to_namespace(cfg)
-    #diffusion_model = DiffusionModel(cfg)
-    #diffusion_model.load_model(model_path / model_id / f"best-val_loss-weights.pt")
-    #diffusion_model = diffusion_model.to('cuda' if torch.cuda.is_available() else 'cpu')
-    #plot_samples(diffusion_model, n=4)
+#     dataset = DatasetRegistry.create(cfg.dataset)
+#     loss_fn = LossRegistry.create(cfg.loss)
+#     if cfg.dataset.name == 'era5' and cfg.loss.name == 'vorticity': #semi cursed (TODO clean up)
+#         loss_fn.set_mean_and_std(dataset.means, dataset.stds,
+#                               dataset.diff_means, dataset.diff_stds)
+#     diffusion_model = DiffusionModel(cfg, loss_fn)
+#     diffusion_model.load_model(model_path / model_id / f"best-val_loss-weights.pt")
+#     diffusion_model = diffusion_model.to('cuda' if torch.cuda.is_available() else 'cpu')
+#     plot_and_save_era5(Path('logs') / model_id / 'version_0/metrics.csv', Path('./reports/figures') / model_id)
 
     # Load the dataset configuration
     config_path = Path("configs/dataset/era5.yaml")
@@ -338,3 +366,4 @@ if __name__ == "__main__":
     # Visualize time series
     for variable in cfg.atmospheric_features:
         visualize_time_series(era5_dataset, variable=variable, level=500, coords=(12.568, 55.676))
+
