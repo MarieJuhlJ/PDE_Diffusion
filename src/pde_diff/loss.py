@@ -40,6 +40,15 @@ class MSE(nn.Module):
         else:
             return (self.mse(model_out, target) * self.c_data[:, None, None, None]).mean()
 
+@LossRegistry.register("fb")
+class ForecastBias(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+
+    def forward(self, model_out, target, **kwargs):
+        return (model_out.sum() - target.sum())/target.sum()
+
+
 @LossRegistry.register("darcy")
 class DarcyLoss(PDE_loss):
     def __init__(self, cfg):
