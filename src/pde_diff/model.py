@@ -291,14 +291,16 @@ class UNet2DWrapper(torch.nn.Module):
 
 @ModelRegistry.register("unet2d_conditional")
 class UNet2DConditionalWrapper(torch.nn.Module):
-    def __init__(self, cfg):
+    def __init__(self, cfg_list):
         super().__init__()
-        self.in_channels = int(cfg.dims.input_dims)
-        self.out_channels = int(cfg.dims.output_dims)
+        model_hp, hp_params = cfg_list[0], cfg_list[1]
+        self.in_channels = int(model_hp.dims.input_dims)
+        self.out_channels = int(model_hp.dims.output_dims)
         self.unet = UNet2DConditionModel(
-            sample_size=(int(cfg.dims.x), int(cfg.dims.y)),
+            sample_size=(int(model_hp.dims.x), int(model_hp.dims.y)),
             in_channels=self.out_channels,
             out_channels=self.out_channels,
+            dropout = hp_params.dropout,
             layers_per_block=2,
             block_out_channels=(64, 128, 256, 512),
             down_block_types=(
