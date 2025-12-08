@@ -22,7 +22,7 @@ class PDE_loss(nn.Module):
             else:
                 self.c_residuals = [self.cfg.c_residual for _ in residual_fns]
         else:
-            self.c_residuals = [0.0 for _ in residual_fns]        
+            self.c_residuals = [0.0 for _ in residual_fns]
 
     def residual_loss(self, x0_hat, var, residual_fn):
         if self.cfg.name == 'vorticity':
@@ -63,6 +63,15 @@ class MSE(nn.Module):
             return self.mse(model_out, target).mean()
         else:
             return (self.mse(model_out, target) * self.c_data[:, None, None, None]).mean()
+
+@LossRegistry.register("fb")
+class ForecastBias(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+
+    def forward(self, model_out, target, **kwargs):
+        return (model_out.sum() - target.sum())/target.sum()
+
 
 @LossRegistry.register("darcy")
 class DarcyLoss(PDE_loss):
@@ -367,7 +376,7 @@ class VorticityLoss(PDE_loss):
 
         wind_u_p, wind_v_p, pv_p, temp_p, geo_p = [previous[:, :, i] for i in range(5)]
         wind_u_c, wind_v_c, pv_c, temp_c, geo_c = [current[:, :, i] for i in range(5)]
-        
+
         dphi_dx_c, dphi_dy_c = self.gradient_helper.gradient_horizontal(geo_c)
         wind_geo_u_c = - dphi_dy_c / self.f0
         wind_geo_v_c = dphi_dx_c / self.f0
@@ -380,7 +389,7 @@ class VorticityLoss(PDE_loss):
     def compute_residual_qgpv(self, x0_previous, x0_change_pred):
         """
         Residual of Holton eq. 6.66
-        
+
         :param self: Description
         :param x0_previous: Description
         :param x0_change_pred: Description
@@ -399,7 +408,7 @@ class VorticityLoss(PDE_loss):
         term_vert = self.dx_dp(A) * self.dx_dp(geo_c) + A[:,1] * self.dxx_dpp(geo_c)
         residual = (1/self.f0 * lap_geo + self.f)[:,1] + term_vert - pv_c[:, 1] # Holton 6.66
         return residual
-    
+
     def vorticity_residual_loss(self, x0_hat, var):
         num_channels = x0_hat.shape[1]
         num_batch = x0_hat.shape[0]
@@ -410,7 +419,7 @@ class VorticityLoss(PDE_loss):
         residual_log_likelihood = gaussian_log_likelihood(torch.zeros_like(residual), means=residual, variance=var[:num_batch])
         residual_loss = -1. * residual_log_likelihood
         return residual_loss.mean()
-        
+
 
 def gaussian_log_likelihood(x, means, variance, return_full = False):
     centered_x = x - means
@@ -503,4 +512,3 @@ if __name__ == "__main__":
     print("_______________")
     print("ERA5 residual geo wind:", r_era5_geo_wind.item())
     print("Random residual geo wind:", r_rand_geo_wind.item())
-    

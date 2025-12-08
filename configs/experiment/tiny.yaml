@@ -1,4 +1,4 @@
-name: exp1
+name: tiny
 
 hyperparameters:
   batch_size: 4

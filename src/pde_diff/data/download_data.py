@@ -8,48 +8,58 @@ import os
 import cdsapi
 import xarray as xr
 
-dataset = "reanalysis-era5-pressure-levels"
-request = {
-    "product_type": ["reanalysis"],
-    "variable": [
-        "u_component_of_wind",
-        "v_component_of_wind",
-        "potential_vorticity",
-        "temperature",
-        "geopotential"
-    ],
-    "year": ["2024"],
-    "month": ["09"],
-    "day": ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10",
-        "11", "12", "13", "14", "15", "16", "17", "18", "19", "20",
-        "21", "22", "23", "24", "25", "26", "27", "28", "29", "30",
-        "31"],
-    "time": [
-        "00:00", "01:00", "02:00",
-        "03:00", "04:00", "05:00",
-        "06:00", "07:00", "08:00",
-        "09:00", "10:00", "11:00",
-        "12:00", "13:00", "14:00",
-        "15:00", "16:00", "17:00",
-        "18:00", "19:00", "20:00",
-        "21:00", "22:00", "23:00"
-    ],
-    "pressure_level": ["450", "500","550"],
-    "data_format": "grib",
-    #"download_format": "unarchived"
-}
+def download_era5_data(months: list[str]=["09"], days: list[str]=[str(i).zfill(2) for i in range(1,32)], test_mode: bool=False, full: bool=False):
+    dataset = "reanalysis-era5-pressure-levels"
+    request = {
+        "product_type": ["reanalysis"],
+        "variable": [
+            "u_component_of_wind",
+            "v_component_of_wind",
+            "potential_vorticity",
+            "temperature",
+            "geopotential"
+        ],
+        "year": ["2024"],
+        "month": months,
+        "day": days,
+        "time": [
+            "00:00", "01:00", "02:00",
+            "03:00", "04:00", "05:00",
+            "06:00", "07:00", "08:00",
+            "09:00", "10:00", "11:00",
+            "12:00", "13:00", "14:00",
+            "15:00", "16:00", "17:00",
+            "18:00", "19:00", "20:00",
+            "21:00", "22:00", "23:00"
+        ],
+        "pressure_level": ["450", "500","550"],
+        "data_format": "grib",
+        #"download_format": "unarchived"
+    }
+    if not full:
+        request["area"]=[70, -180, 46, 180]  # North, West, South, East
 
-grib_file = "./data/era5/era5.grib"
-os.makedirs(os.path.dirname(grib_file), exist_ok=True)
+    grib_file = "./data/era5/era5.grib"
+    os.makedirs(os.path.dirname(grib_file), exist_ok=True)
 
-client = cdsapi.Client()
-client.retrieve(dataset, request).download(grib_file)
-print(f"Downloaded ERA5 data to {grib_file}")
+    client = cdsapi.Client()
+    client.retrieve(dataset, request).download(grib_file)
+    print(f"Downloaded ERA5 data to {grib_file}")
 
-ds = xr.open_dataset(grib_file, engine='cfgrib')
-ds.to_zarr('./data/era5/zarr',mode="w")
-print("Converted GRIB file to Zarr format at data/era5/zarr")
+    ds = xr.open_dataset(grib_file, engine='cfgrib')
+    save_path = './data/era5/zarr'
+    if test_mode:
+        save_path += "_test"
+    if full:
+        save_path += "_full"
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    ds.to_zarr(save_path,mode="w")
+    print(f"Converted GRIB file to Zarr format at {save_path}")
 
-#delete the grib file to save space
-os.remove(grib_file)
-print(f"Deleted temporary GRIB file {grib_file}")
+    #delete the grib file to save space
+    os.remove(grib_file)
+    print(f"Deleted temporary GRIB file {grib_file}")
+
+if __name__ == "__main__":
+    download_era5_data(test_mode=False)
+    download_era5_data(months=["10"], days=["01","02"], test_mode=True)

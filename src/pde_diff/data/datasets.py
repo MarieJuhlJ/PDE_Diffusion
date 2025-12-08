@@ -136,6 +136,17 @@ class ERA5Dataset(Dataset):
             self.data = self.data.sel(latitude=slice(*lat_range))
             print(f"Limiting latitude to range: {lat_range}")
 
+        if self.data["longitude"].shape[0] % 16 != 0:
+            # crop lat to multiple of 16
+            print(f"Cropping longitude of size {self.data['longitude'].shape[0]} to {(self.data['longitude'].shape[0] // 16) * 16}.")
+            self.data = self.data.isel(longitude=slice(0, -(self.data["longitude"].shape[0] % 16)))
+
+        if self.data["latitude"].shape[0] % 16 != 0:
+            # crop lat to multiple of 16
+            print(f"Cropping latitude of size {self.data['latitude'].shape[0]} to {(self.data['latitude'].shape[0] // 16) * 16}.")
+            self.data = self.data.isel(latitude=slice(0, -(self.data["latitude"].shape[0] % 16)))
+
+
         self.grid_lon = self.data["longitude"].values
         self.grid_lat = self.data["latitude"].values
         self.num_lon = len(self.grid_lon)
@@ -274,139 +285,13 @@ class ERA5Dataset(Dataset):
 
         return (prev_inputs, state_change)
 
-class BatchedERA5Dataset(ERA5Dataset):
-    """
-    Dataset class for ERA5 batched training data.
-
-    This dataset object returns a full batch as a single sample, it may be faster.
-
-    Args that should be in config:
-        path: Dataset path.
-        atmospheric_features: List of features dependent on pressure levels.
-        single_features: List of features not dependent on pressure levels.
-        static_features: List of features not dependent on time.
-        max_year (optional): Max year to include in training set. Defaults to 2018.
-        time_step (optional): Time step between predictions.
-                    E.g. 12h steps correspond to time_step = 2 in a 6h dataset. Defaults to 2.
-        batch_size (optional): Size of the batch. Defaults to 32.
-    """
-
-    def __init__(
-        self,
-        cfg: DictConfig,
-    ):
-        """
-        Initialize the GenCast dataset object.
-        """
-        super().__init__(cfg=cfg)
-
-        self.batch_size = cfg.batch_size
-
-    def __len__(self):
-        return (super().__len__()) // self.batch_size
-
-    def _batchify_inputs(self, data):
-        start_idx = []
-        for i in range(self.batch_size):
-            start_idx.append([i, i + self.time_step])
-        return data[start_idx]
-
-    def _batchify_diffs(self, data):
-        prev_idx = []
-        target_idx = []
-        for i in range(self.batch_size):
-            prev_idx.append(i + self.time_step)
-            target_idx.append(i + 2 * self.time_step)
-        return data[target_idx] - data[prev_idx]
-
-    def _generate_clock_features(self, ds):
-        day_of_year = ds.time.dt.dayofyear.values / 365.0
-        sin_day_of_year = (
-            np.sin(2 * np.pi * day_of_year)[:, None, None]
-            * np.ones((self.num_lon, self.num_lat))[None, :, :]
-        )
-        cos_day_of_year = (
-            np.cos(2 * np.pi * day_of_year)[:, None, None]
-            * np.ones((self.num_lon, self.num_lat))[None, :, :]
-        )
-
-        local_mean_time = (
-            np.ones((self.num_lon, self.num_lat))[None, :, :]
-            * (ds.time.dt.hour.values[:, None, None])
-            + ds["longitude"].values[None, :, None] * 4 / 60.0
-        )
-        sin_local_mean_time = np.sin(2 * np.pi * local_mean_time / 24.0)
-        cos_local_mean_time = np.cos(2 * np.pi * local_mean_time / 24.0)
-
-        clock_input_data = np.stack(
-            [sin_day_of_year, cos_day_of_year, sin_local_mean_time, cos_local_mean_time], axis=-1
-        ).astype(np.float32)
-        clock_input_data = einops.rearrange(clock_input_data, "t lon lat clock -> t clock lon lat")
-        return clock_input_data
-
-    def __getitem__(self, item):
-        # Compute the starting and ending point of the batch.
-        starting_point = self.batch_size * item
-        ending_point = starting_point + 3 * self.time_step + self.batch_size - 1
-
-        # Load data
-        ds = self.data.isel(time=np.arange(starting_point, ending_point))
-        ds_atm = (
-            ds[self.atmospheric_features]
-            .to_array()
-            .transpose("time", "longitude", "latitude", "isobaricInhPa", "variable")
-            .values
-        )
-        ds_atm = einops.rearrange(ds_atm, "t lon lat lev var -> t (var lev) lon lat")
-        raw_inputs = ds_atm
-        if self.single_features:
-            ds_single = (
-                ds[self.single_features]
-                .to_array()
-                .transpose("time", "longitude", "latitude", "variable")
-                .values
-            )
-            ds_single = einops.rearrange(ds_single, "t lon lat var -> t var lon lat")
-
-            raw_inputs = np.concatenate([raw_inputs, ds_single], axis=1)
-        if self.static_features:
-            ds_static = (
-                ds[self.static_features]
-                .to_array()
-                .transpose("longitude", "latitude", "variable")
-                .values
-            )
-            ds_static = np.stack([ds_static] * (ending_point - starting_point), axis=0)
-            ds_static = einops.rearrange(ds_static, "lon lat var -> (var) lon lat")
-
-            raw_inputs = np.concatenate([raw_inputs, ds_static], axis=1)
-
-        # Compute inputs
-        batched_inputs = self._batchify_inputs(raw_inputs)
-        batched_inputs_norm = self._normalize(batched_inputs, self.means, self.stds)
-
-        # Add time features
-        ds_clock = self._batchify_inputs(self._generate_clock_features(ds))
-        inputs = np.concatenate([batched_inputs_norm, ds_clock], axis=2)
-        # Concatenate timesteps
-        inputs = np.concatenate([inputs[:, 0, :, :, :], inputs[:, 1, :, :, :]], axis=1)
-        prev_inputs = np.nan_to_num(inputs).astype(np.float32)
-
-        # Compute targets residuals
-        raw_state_change = np.concatenate([ds_atm, ds_single], axis=2) if self.single_features else ds_atm
-        batched_state_change = self._batchify_diffs(raw_state_change)
-        state_change = self._normalize(batched_state_change, self.diff_means, self.diff_stds)
-        state_change = np.nan_to_num(state_change).astype(np.float32)
-
-        return (prev_inputs, state_change)
-
 def increment_clock_features(clock_features: torch.Tensor, step_size: int) -> torch.Tensor:
     """
     Increment clock features by a given hourly step size using PyTorch.
     """
     # Extract the day and time and compute their angles
-    sin_day_of_year, cos_day_of_year = clock_features[..., 0], clock_features[..., 1]
-    sin_local_mean_time, cos_local_mean_time = clock_features[..., 2], clock_features[..., 3]
+    sin_day_of_year, cos_day_of_year = clock_features[:, 0,:,:], clock_features[:, 1,:,:]
+    sin_local_mean_time, cos_local_mean_time = clock_features[:, 2,:,:], clock_features[:, 3,:,:]
     day_of_year_angle = torch.atan2(sin_day_of_year, cos_day_of_year)
     local_mean_time_angle = torch.atan2(sin_local_mean_time, cos_local_mean_time)
 
@@ -422,24 +307,15 @@ def increment_clock_features(clock_features: torch.Tensor, step_size: int) -> to
     cos_local_mean_time = torch.cos(local_mean_time_angle)
 
     updated_clock_features = torch.stack(
-        [sin_day_of_year, cos_day_of_year, sin_local_mean_time, cos_local_mean_time], dim=-1
+        [sin_day_of_year, cos_day_of_year, sin_local_mean_time, cos_local_mean_time], dim=1
     )
     return updated_clock_features
 
 if __name__ == "__main__":
     # Test ERA5 data:
     from omegaconf import OmegaConf
+    cfg = OmegaConf.load("configs/dataset/era5.yaml")
 
-    cfg = OmegaConf.create({
-        "path": "data/era5/zarr",  # Replace with the actual path to your Zarr dataset
-        "atmospheric_features": ["u", "v", "vo"],
-        "single_features": [],
-        "static_features": [],
-        "max_year": 2024,
-        "time_step": 1,
-        "lat_range": [70, 46],  # For subsetting
-        "downsample_factor": 3  # For downsampling
-    })
     ERA5_dataset = ERA5Dataset(cfg=cfg)
     ERA5_dataset_len = len(ERA5_dataset)
     print(f"Longitude grid size: {len(ERA5_dataset.grid_lon)}")
@@ -449,13 +325,3 @@ if __name__ == "__main__":
     sample_idx = 10
     prev_inputs, target_residuals = ERA5_dataset[sample_idx]
     print(f"Sample prev_inputs shape: {prev_inputs.shape}, Sample target_residuals shape: {target_residuals.shape}")
-
-    # Test Batched ERA5 data:
-    batch_size = 4
-    cfg.batch_size = batch_size
-    Batched_ERA5_dataset = BatchedERA5Dataset(cfg=cfg)
-    Batched_ERA5_dataset_len = len(Batched_ERA5_dataset)
-    print(f"Batched ERA5 Dataset length: {Batched_ERA5_dataset_len}")
-    batched_sample_idx = 2
-    prev_inputs_batched, target_residuals_batched = Batched_ERA5_dataset[batched_sample_idx]
-    print(f"Batched Sample prev_inputs shape: {prev_inputs_batched.shape}, Batched Sample target_residuals shape: {target_residuals_batched.shape}")

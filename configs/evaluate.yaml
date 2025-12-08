@@ -1,0 +1,18 @@
+model:
+  path: models/exp1-eval_test
+
+steps: 3
+
+dataset:
+  path: ./data/era5/zarr_test
+
+
+# Avoid logging to folders
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  job:
+    chdir: False
+  sweep:
+    dir: .
