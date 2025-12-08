@@ -14,10 +14,13 @@ from pde_diff.data.utils import split_dataset
 
 @hydra.main(version_base=None, config_name="config.yaml", config_path="../../configs")
 def train(cfg: DictConfig):
-    pl.seed_everything(cfg.seed)
+    hp_config = cfg.experiment.hyperparameters
+    if cfg.get("k_folds") is not None:
+        assert cfg.id is not None, "If k_folds is used, an id must be provided."
 
-    hp_config =cfg.experiment.hyperparameters
     cfg.id = unique_id(length=5) if cfg.id == None else cfg.id
+    cfg.id += f"-{cfg.idx_fold}" if cfg.get("k_folds", None) else ""
+    pl.seed_everything(cfg.seed)
     cfg.model.dims = cfg.dataset.dims
 
     dataset = DatasetRegistry.create(cfg.dataset)
@@ -27,9 +30,8 @@ def train(cfg: DictConfig):
 
     train_dataloader = DataLoader(dataset_train, batch_size=hp_config.batch_size, shuffle=True, num_workers=4,persistent_workers=True)
     val_dataloader = DataLoader(dataset_val, batch_size=hp_config.batch_size, shuffle=False, num_workers=4,persistent_workers=True)
-
+    
     wandb_name = f"{cfg.experiment.name}-{cfg.id}"
-    wandb_name += f"-{cfg.idx_fold}-of-{cfg.k_folds}-folds" if cfg.get("k_folds", None) else ""
 
     acc = "gpu" if torch.cuda.is_available() else "cpu"
 

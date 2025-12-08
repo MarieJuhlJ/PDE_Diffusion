@@ -17,10 +17,10 @@ from pde_diff.data import datasets
 class DiffusionModel(pl.LightningModule):
     def __init__(self, cfg):
         super().__init__()
-        self.model = ModelRegistry.create(cfg.model)
         self.scheduler = SchedulerRegistry.create(cfg.scheduler)
         self.loss_fn = LossRegistry.create(cfg.loss)
         self.hp_config = cfg.experiment.hyperparameters
+        self.model = ModelRegistry.create([cfg.model, self.hp_config])
         if cfg.dataset.name == 'era5' and cfg.loss.name == 'vorticity': #semi cursed (TODO clean up)
             self.atmospheric_features = cfg.dataset.atmospheric_features
             self.single_features = cfg.dataset.single_features
@@ -126,7 +126,6 @@ class DiffusionModel(pl.LightningModule):
                 self.log("val_era5_planetary_residual", residual_planetary, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
                 self.log("val_era5_geo_wind_residual", residual_geo_wind, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
                 self.log("val_era5_qgpv_residual", residual_qgpv, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
-
 
     def on_validation_epoch_end(self):
         """For on_epoch_end validation metrics"""
@@ -261,14 +260,16 @@ class DummyModel(torch.nn.Module):
 
 @ModelRegistry.register("unet2d")
 class UNet2DWrapper(torch.nn.Module):
-    def __init__(self, cfg):
+    def __init__(self, cfg_list):
         super().__init__()
-        in_channels = int(cfg.dims.input_dims)
-        out_channels = int(cfg.dims.output_dims)
+        model_hp, hp_params = cfg_list[0], cfg_list[1]
+        in_channels = int(model_hp.dims.input_dims)
+        out_channels = int(model_hp.dims.output_dims)
         self.unet = UNet2DModel(
-            sample_size=int(cfg.dims.x),
+            sample_size=int(model_hp.dims.x),
             in_channels=in_channels,
             out_channels=out_channels,
+            dropout = hp_params.dropout,
             layers_per_block=2,
             block_out_channels=(64, 128, 256, 512),
             down_block_types=(

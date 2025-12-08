@@ -84,6 +84,8 @@ class ModelRegistry:
 
     @classmethod
     def create(cls, cfg):
+        if type(cfg) == list:
+            return cls._registry[cfg[0].name](cfg)
         if cfg.name not in cls._registry:
             raise ValueError(f"Unknown model: {cfg.name}")
         return cls._registry[cfg.name](cfg)

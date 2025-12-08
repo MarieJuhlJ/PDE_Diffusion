@@ -16,7 +16,7 @@ n_trials: null
 
 loss:
   name: mse
-  c_residual: [1e8, 1e-5, 1e-5] #[vorticity loss (#1 planetary, #2 geostrophic wind, #3 qgpv)]
+  c_residual: [1e7, 1e-2, 1e-2] #[vorticity loss (#1 planetary, #2 geostrophic wind, #3 qgpv)]
 
 model:
   name: unet2d_conditional
