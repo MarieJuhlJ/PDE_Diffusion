@@ -11,12 +11,15 @@ seed: 42
 id: null
 save_dir: 'models/'
 
+# for hp tuning
+n_trials: null
+
 loss:
   name: mse
   c_residual: [1e8, 1e-5, 1e-5] #[vorticity loss (#1 planetary, #2 geostrophic wind, #3 qgpv)]
 
 model:
-  name: unet2d
+  name: unet2d_conditional
   save_best_model: true
   dims: null
 
