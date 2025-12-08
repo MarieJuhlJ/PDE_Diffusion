@@ -14,14 +14,12 @@ from dotenv import load_dotenv
 import lightning as pl
 from torch.utils.data import DataLoader
 from omegaconf import DictConfig, OmegaConf
-import pymysql
 
 from pde_diff.utils import DatasetRegistry, LossRegistry, unique_id
 from pde_diff.model import DiffusionModel
 from pde_diff.callbacks import SaveBestModel
 from pde_diff.data.utils import split_dataset
 
-pymysql.install_as_MySQLdb()
 load_dotenv()
 
 class ObjectiveFunction(object):
@@ -83,7 +81,7 @@ class ObjectiveFunction(object):
 
 @hydra.main(version_base=None, config_name="config.yaml", config_path="../../configs")
 def run_optimization(cfg: DictConfig):
-    storage_url = os.getenv("OPTUNA_STORAGE")
+    storage_url = "sqlite:///hp_param_study.db"
 
     cfg.n_trials = cfg.get("n_trials", 20)
     pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=10, n_min_trials=5)
