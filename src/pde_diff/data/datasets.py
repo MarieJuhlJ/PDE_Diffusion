@@ -136,6 +136,17 @@ class ERA5Dataset(Dataset):
             self.data = self.data.sel(latitude=slice(*lat_range))
             print(f"Limiting latitude to range: {lat_range}")
 
+        if self.data["longitude"].shape[0] % 16 != 0:
+            # crop lat to multiple of 16
+            print(f"Cropping longitude of size {self.data['longitude'].shape[0]} to {(self.data['longitude'].shape[0] // 16) * 16}.")
+            self.data = self.data.isel(longitude=slice(0, -(self.data["longitude"].shape[0] % 16)))
+
+        if self.data["latitude"].shape[0] % 16 != 0:
+            # crop lat to multiple of 16
+            print(f"Cropping latitude of size {self.data['latitude'].shape[0]} to {(self.data['latitude'].shape[0] // 16) * 16}.")
+            self.data = self.data.isel(latitude=slice(0, -(self.data["latitude"].shape[0] % 16)))
+
+
         self.grid_lon = self.data["longitude"].values
         self.grid_lat = self.data["latitude"].values
         self.num_lon = len(self.grid_lon)
@@ -314,13 +325,3 @@ if __name__ == "__main__":
     sample_idx = 10
     prev_inputs, target_residuals = ERA5_dataset[sample_idx]
     print(f"Sample prev_inputs shape: {prev_inputs.shape}, Sample target_residuals shape: {target_residuals.shape}")
-
-    # Test Batched ERA5 data:
-    batch_size = 4
-    cfg.batch_size = batch_size
-    Batched_ERA5_dataset = BatchedERA5Dataset(cfg=cfg)
-    Batched_ERA5_dataset_len = len(Batched_ERA5_dataset)
-    print(f"Batched ERA5 Dataset length: {Batched_ERA5_dataset_len}")
-    batched_sample_idx = 2
-    prev_inputs_batched, target_residuals_batched = Batched_ERA5_dataset[batched_sample_idx]
-    print(f"Batched Sample prev_inputs shape: {prev_inputs_batched.shape}, Batched Sample target_residuals shape: {target_residuals_batched.shape}")
