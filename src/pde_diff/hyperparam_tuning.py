@@ -1,6 +1,5 @@
 """
-Running this script will launch an Optuna hyperparameter optimization study. It requires a MySQL database to store the study results.
-The connection details should be stored in an .env file as OPTUNA_STORAGE.
+Running this script will launch an Optuna hyperparameter optimization study.
 """
 
 import gc
@@ -9,7 +8,6 @@ import optuna
 from optuna.integration import PyTorchLightningPruningCallback
 import hydra
 import torch
-from dotenv import load_dotenv
 
 import lightning as pl
 from torch.utils.data import DataLoader
@@ -19,8 +17,6 @@ from pde_diff.utils import DatasetRegistry, LossRegistry, unique_id
 from pde_diff.model import DiffusionModel
 from pde_diff.callbacks import SaveBestModel
 from pde_diff.data.utils import split_dataset
-
-load_dotenv()
 
 class ObjectiveFunction(object):
     def __init__(self, cfg: DictConfig):
