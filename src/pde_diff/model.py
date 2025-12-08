@@ -17,10 +17,10 @@ from pde_diff.data import datasets
 class DiffusionModel(pl.LightningModule):
     def __init__(self, cfg):
         super().__init__()
-        self.model = ModelRegistry.create(cfg.model)
         self.scheduler = SchedulerRegistry.create(cfg.scheduler)
         self.loss_fn = LossRegistry.create(cfg.loss)
         self.hp_config = cfg.experiment.hyperparameters
+        self.model = ModelRegistry.create([cfg.model, self.hp_config])
         if cfg.dataset.name == 'era5' and cfg.loss.name == 'vorticity': #semi cursed (TODO clean up)
             self.atmospheric_features = cfg.dataset.atmospheric_features
             self.single_features = cfg.dataset.single_features
@@ -52,7 +52,7 @@ class DiffusionModel(pl.LightningModule):
 
         if self.conditional:
             noisy_images = torch.cat([conditionals, noisy_images], dim=1)
-        
+
         model_out = self.model(noisy_images, steps)
         x0_hat = model_out
 
@@ -81,13 +81,13 @@ class DiffusionModel(pl.LightningModule):
         x0_hat = model_out
         if self.conditional:
             x0_hat = torch.cat([conditionals[:, 19:34], model_out], dim=1) #hardcoded for now (TODO)
-        
+
         variance = self.scheduler.posterior_variance[steps]
         self.loss_fn.c_data = self.scheduler.p2_loss_weight[steps]
         loss = self.loss_fn(model_out=model_out, target=target, x0_hat=x0_hat, var=variance)
         self.log("val_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
         self.additional_validation_metrics(model_out, target, x0_hat, steps)
-    
+
     def additional_validation_metrics(self, model_out, target, x0_hat, steps):
         metrics = self.cfg.dataset.validation_metrics
         for metric_name in metrics:
@@ -106,7 +106,6 @@ class DiffusionModel(pl.LightningModule):
                 self.log("val_era5_planetary_residual", residual_planetary, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
                 self.log("val_era5_geo_wind_residual", residual_geo_wind, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
                 self.log("val_era5_qgpv_residual", residual_qgpv, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
-
 
     def on_validation_epoch_end(self):
         """For on_epoch_end validation metrics"""
@@ -239,14 +238,16 @@ class DummyModel(torch.nn.Module):
 
 @ModelRegistry.register("unet2d")
 class UNet2DWrapper(torch.nn.Module):
-    def __init__(self, cfg):
+    def __init__(self, cfg_list):
         super().__init__()
-        in_channels = int(cfg.dims.input_dims)
-        out_channels = int(cfg.dims.output_dims)
+        model_hp, hp_params = cfg_list[0], cfg_list[1]
+        in_channels = int(model_hp.dims.input_dims)
+        out_channels = int(model_hp.dims.output_dims)
         self.unet = UNet2DModel(
-            sample_size=int(cfg.dims.x),
+            sample_size=int(model_hp.dims.x),
             in_channels=in_channels,
             out_channels=out_channels,
+            dropout = hp_params.dropout,
             layers_per_block=2,
             block_out_channels=(64, 128, 256, 512),
             down_block_types=(

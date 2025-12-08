@@ -4,6 +4,7 @@ import yaml
 from matplotlib.colors import LinearSegmentedColormap
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import matplotlib.font_manager as fm
 import numpy as np
 from omegaconf import OmegaConf
 import pandas as pd
@@ -11,7 +12,13 @@ import torch
 
 from pde_diff.data.datasets import ERA5Dataset
 from pde_diff.model import DiffusionModel
+from pde_diff.loss import DarcyLoss
 from pde_diff.utils import dict_to_namespace
+
+# Path to your TTF file
+font_path = "./times.ttf"
+fm.fontManager.addfont(font_path)
+plt.rcParams['font.family'] = 'Times New Roman'
 
 plt.style.use("pde_diff.custom_style")
 
@@ -41,21 +48,57 @@ COLOR_BARS = {
     "pv": custom_cmap,
 }
 
-def plot_darcy_samples(model, model_id, n=4, out_dir=Path('./reports/figures')):
+def plot_darcy_samples(model, model_id, out_dir=Path('./reports/figures')):
+    from matplotlib.colors import LogNorm
     save_dir = Path(out_dir) / model_id
+    cfg = OmegaConf.create({
+        "c_residual": None
+    })
+    loss = DarcyLoss(cfg)
     save_dir.mkdir(parents=True, exist_ok=True)
-    samples = model.sample_loop(batch_size=n)
+
+    # Generate samples
+    samples = model.sample_loop(batch_size=1)
+    loss_samples = loss.compute_residual_field_for_plot(
+        samples.to('cuda' if torch.cuda.is_available() else 'cpu')
+    )
+    loss_samples = loss_samples.cpu().numpy()
     samples = samples.cpu().numpy()
-    fig, axs = plt.subplots(2, n, figsize=(n*3, 3))
-    for i in range(n):
-        axs[0, i].imshow(samples[i, 0], cmap='magma')
-        axs[0, i].set_title(f'Sample {i+1} - K')
-        axs[0, i].axis('off')
-        axs[1, i].imshow(samples[i, 1], cmap='magma')
-        axs[1, i].set_title(f'Sample {i+1} - P')
-        axs[1, i].axis('off')
+
+    # Set up figure
+    fig, axs = plt.subplots(1, 3, figsize=(12, 4))
+
+    # Plot #1
+    im0 = axs[0].imshow(samples[0, 0], cmap='magma')
+    axs[0].set_title(r'Permeability - $K$')
+    axs[0].axis('off')
+    fig.colorbar(im0, ax=axs[0], fraction=0.046, pad=0.04)
+
+    # Plot #2
+    im1 = axs[1].imshow(samples[0, 1], cmap='magma')
+    axs[1].set_title(r'Pressure - $P$')
+    axs[1].axis('off')
+    fig.colorbar(im1, ax=axs[1], fraction=0.046, pad=0.04)
+
+    # Plot #3
+
+    im2 = axs[2].imshow(
+        loss_samples[0],
+        cmap='magma',
+        norm=LogNorm()   # ← Log scale here
+    )
+
+    axs[2].set_title(r'Residual - $\mathcal{R}_{\text{MAE}}$')
+    axs[2].axis('off')
+
+    fig.colorbar(im2, ax=axs[2], fraction=0.046, pad=0.04)
+
+    # Save
     plt.savefig(save_dir / f'samples{PLOT_TYPE}', bbox_inches='tight')
+    plt.close(fig)
+
     print(f"Saved samples to {save_dir / f'samples{PLOT_TYPE}'}")
+
 
 def plot_training_metrics(model_id, out_dir=Path("./reports/figures")):
     df = pd.read_csv(Path("./logs") / model_id / "version_0" / "metrics.csv").sort_values(["epoch", "step"])
@@ -286,6 +329,186 @@ def visualize_time_series(dataset, variable, level=500, dir=Path("./reports/figu
     plt.savefig(plot_path, bbox_inches='tight', pad_inches=0.05)
     print(f"Saved time series plot to {plot_path}")
 
+def plot_darcy_val_metrics(model_id_1, model_id_2, fold_id, log_path, out_dir, smooth_window=10):
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    from pathlib import Path
+
+    # --- Global styling tweaks ---
+    plt.rcParams.update({
+        "figure.figsize": (13, 5),
+        "axes.grid": True,
+        "grid.alpha": 0.3,
+        "axes.titlesize": 13,
+        "axes.labelsize": 12,
+        "xtick.labelsize": 10,
+        "ytick.labelsize": 10,
+        "legend.fontsize": 10,
+    })
+
+    # Custom colour palette (different from default Matplotlib cycle)
+    diffusion_color = "#2A9D8F"   # teal
+    diffusion_ci    = "#9AD1C5"   # light teal
+    pidm_color      = "#E76F51"   # warm coral
+    pidm_ci         = "#F4A261"   # light orange
+
+    def moving_average_2d(arr, window):
+        """Apply moving average along the time axis for a 2D array [fold, time]."""
+        if window <= 1:
+            return arr
+        kernel = np.ones(window) / window
+        return np.apply_along_axis(
+            lambda m: np.convolve(m, kernel, mode="valid"), axis=1, arr=arr
+        )
+
+    def load_model_stats(model_id, smooth_window=1):
+        residual_errors = []
+        weighted_mse_errors = []
+        steps = None
+
+        for fold in range(1, fold_id + 1):
+            current_model_id = f"{model_id}-{fold}"
+            csv_path = Path(log_path) / current_model_id / "version_0" / "metrics.csv"
+
+            df = (
+                pd.read_csv(csv_path)
+                .apply(pd.to_numeric, errors="ignore")
+                .dropna(subset=["step"])
+                .sort_values("step")
+            )
+
+            if steps is None:
+                steps = df["step"].values
+
+            residual_errors.append(df["val_darcy_residual"].dropna().values)
+            weighted_mse_errors.append(df["val_mse_(weighted)"].dropna().values)
+
+        residual_errors = np.array(residual_errors)      # shape: [fold, time]
+        weighted_mse_errors = np.array(weighted_mse_errors)
+
+        # --- Smooth over time (epochs) ---
+        residual_errors = moving_average_2d(residual_errors, smooth_window)
+        weighted_mse_errors = moving_average_2d(weighted_mse_errors, smooth_window)
+
+        n = residual_errors.shape[0]
+
+        res_mean = residual_errors.mean(axis=0)
+        res_std = residual_errors.std(axis=0)
+        res_low = res_mean - 1.96 * res_std / np.sqrt(n)
+        res_high = res_mean + 1.96 * res_std / np.sqrt(n)
+
+        mse_mean = weighted_mse_errors.mean(axis=0)
+        mse_std = weighted_mse_errors.std(axis=0)
+        mse_low = mse_mean - 1.96 * mse_std / np.sqrt(n)
+        mse_high = mse_mean + 1.96 * mse_std / np.sqrt(n)
+
+        # Number of *smoothed* points
+        epochs = res_mean.shape[0]
+
+        return {
+            "epochs": epochs,
+            "res_mean": res_mean,
+            "res_low": res_low,
+            "res_high": res_high,
+            "mse_mean": mse_mean,
+            "mse_low": mse_low,
+            "mse_high": mse_high,
+        }
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    stats1 = load_model_stats(model_id_1, smooth_window)
+    stats2 = load_model_stats(model_id_2, smooth_window)
+
+    epochs = min(stats1["epochs"], stats2["epochs"])
+    x = np.arange(epochs)
+
+    fig, axes = plt.subplots(1, 2, sharex=True)
+
+    # ---------------- Residual ----------------
+    ax = axes[0]
+
+    # Diffusion
+    ax.plot(x, stats1["res_mean"][:epochs],
+            label="Diffusion mean",
+            linewidth=2.2,
+            color=diffusion_color)
+    ax.fill_between(
+        x,
+        stats1["res_low"][:epochs],
+        stats1["res_high"][:epochs],
+        alpha=0.3,
+        color=diffusion_ci,
+        label="Diffusion 95% CI",
+    )
+
+    # PIDM
+    ax.plot(x, stats2["res_mean"][:epochs],
+            label="PIDM mean",
+            linewidth=2.2,
+            color=pidm_color)
+    ax.fill_between(
+        x,
+        stats2["res_low"][:epochs],
+        stats2["res_high"][:epochs],
+        alpha=0.3,
+        color=pidm_ci,
+        label="PIDM 95% CI",
+    )
+
+    ax.set_xlabel(f"Epoch (smoothed, window={smooth_window})")
+    ax.set_ylabel(r"$\mathcal{R}_{\text{MAE}}(\mathbf{x_0}) \sim p_\theta (\mathbf{x_0})$")
+    ax.set_title("Validation Darcy Residual")
+    ax.set_yscale("log")
+    ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
+
+    # ---------------- MSE ----------------
+    ax = axes[1]
+
+    # Diffusion
+    ax.plot(x, stats1["mse_mean"][:epochs],
+            label="Diffusion mean",
+            linewidth=2.2,
+            color=diffusion_color)
+    ax.fill_between(
+        x,
+        stats1["mse_low"][:epochs],
+        stats1["mse_high"][:epochs],
+        alpha=0.3,
+        color=diffusion_ci,
+        label="Diffusion 95% CI",
+    )
+
+    # PIDM
+    ax.plot(x, stats2["mse_mean"][:epochs],
+            label="PIDM mean",
+            linewidth=2.2,
+            color=pidm_color)
+    ax.fill_between(
+        x,
+        stats2["mse_low"][:epochs],
+        stats2["mse_high"][:epochs],
+        alpha=0.3,
+        color=pidm_ci,
+        label="PIDM 95% CI",
+    )
+
+    ax.set_xlabel(f"Epoch (smoothed, window={smooth_window})")
+    ax.set_ylabel(r"$\mathbb{E}_{t, \mathbf{x_0}}[\lambda_t \|\mathbf{x_0} - \hat{\mathbf{x}}_0\|^2]$")
+    ax.set_title("Validation Weighted MSE")
+    ax.set_yscale("log")
+    ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
+
+    # Improve spacing
+    fig.tight_layout(rect=[0, 0.0, 1, 0.95])
+
+    save_path = out_dir / f"{model_id_1}_vs_{model_id_2}_darcy_val_metrics.png"
+    fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved Darcy validation metrics plot to {save_path}")
+
 def plot_and_save_era5(csv_path, out_dir):
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -301,11 +524,18 @@ def plot_and_save_era5(csv_path, out_dir):
     plt.legend(); plt.grid(); plt.title("Loss")
     plt.savefig(out_dir / "loss.png"); plt.clf()
 
-    res_df = df.dropna(subset=["val_era5_vorticity_residual"])
+    res_df_geo = df.dropna(subset=["val_era5_geo_wind_residual"])
+    res_df_planetary = df.dropna(subset=["val_era5_planetary_residual"])
+    res_df_qgpv = df.dropna(subset=["val_era5_qgpv_residual"])
     mse_df = df.dropna(subset=["val_mse_(weighted)"])
+    data_geo_scaled = res_df_geo.val_era5_geo_wind_residual / res_df_geo.val_era5_geo_wind_residual[0]
+    data_planetary_scaled = res_df_planetary.val_era5_planetary_residual / res_df_planetary.val_era5_planetary_residual[0]
+    data_qgpv_scaled = res_df_qgpv.val_era5_qgpv_residual / res_df_qgpv.val_era5_qgpv_residual[0]
 
     # ---- Residual + MSE plot ----
-    plt.plot(res_df.epoch, res_df.val_era5_vorticity_residual, label="era5_residual")
+    plt.plot(res_df_geo.epoch, data_geo_scaled, label="geo_wind_residual (scaled)")
+    plt.plot(res_df_planetary.epoch, data_planetary_scaled, label="planetary_residual (scaled)")
+    plt.plot(res_df_qgpv.epoch, data_qgpv_scaled, label="qgpv_residual (scaled)")
     plt.plot(mse_df.epoch, mse_df["val_mse_(weighted)"], label="mse_weighted")
     plt.legend(); plt.grid(); plt.title("Residuals & MSE")
     plt.savefig(out_dir / "residuals.png"); plt.clf()
@@ -314,20 +544,30 @@ def plot_and_save_era5(csv_path, out_dir):
 
 
 if __name__ == "__main__":
-#     model_path = Path('./models')
-#     model_id = 'exp1-xbvcn'
+    from pde_diff.utils import DatasetRegistry, LossRegistry
 
-#     cfg = OmegaConf.load(model_path / model_id / "config.yaml")
+    model_path = Path('./models')
+    model_id = 'exp1-aaaaa'
+    model_id_2 = 'exp1-aaaab'
+    # cfg = OmegaConf.load(model_path / (model_id) / "config.yaml")
+    # diffusion_model = DiffusionModel(cfg)
+    # diffusion_model.load_model(model_path / model_id / f"best-val_loss-weights.pt")
+    # plot_darcy_samples(diffusion_model, model_id, Path('./reports/figures') / model_id)
 
-#     dataset = DatasetRegistry.create(cfg.dataset)
-#     loss_fn = LossRegistry.create(cfg.loss)
-#     if cfg.dataset.name == 'era5' and cfg.loss.name == 'vorticity': #semi cursed (TODO clean up)
-#         loss_fn.set_mean_and_std(dataset.means, dataset.stds,
-#                               dataset.diff_means, dataset.diff_stds)
-#     diffusion_model = DiffusionModel(cfg, loss_fn)
-#     diffusion_model.load_model(model_path / model_id / f"best-val_loss-weights.pt")
-#     diffusion_model = diffusion_model.to('cuda' if torch.cuda.is_available() else 'cpu')
-#     plot_and_save_era5(Path('logs') / model_id / 'version_0/metrics.csv', Path('./reports/figures') / model_id)
+    # plot_darcy_val_metrics(
+    #     model_id_1=model_id,
+    #     model_id_2=model_id_2,
+    #     fold_id=5,
+    #     log_path="logs",
+    #     out_dir=f"reports/figures/{model_id}",
+    #     smooth_window=20,
+    # )
+
+    cfg = OmegaConf.load(model_path / model_id / "config.yaml")
+    dataset = DatasetRegistry.create(cfg.dataset)
+    diffusion_model = DiffusionModel(cfg)
+    diffusion_model.load_model(model_path / model_id / f"best-val_loss-weights.pt")
+    diffusion_model = diffusion_model.to('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Load the dataset configuration
     config_path = Path("configs/dataset/era5.yaml")

@@ -46,9 +46,9 @@ class PDE_loss(nn.Module):
             total = (self.mse(model_out, target) * self.c_data[:, None, None, None]).mean()
 
         for fn, w in zip(self.residual_fns, self.c_residuals):
-            if w > 0:
+            if w > 0.0:
                 r = self.residual_loss(x0_hat, var, fn)
-                total += + w * r
+                total += r * w
         return total
 
 @LossRegistry.register("mse")
@@ -93,26 +93,6 @@ class DarcyLoss(PDE_loss):
         f[-w:, -w:] = -r
         return f
 
-    def darcy_residual_F(self, x):
-        B, C, H, W = x.shape
-        assert C == 2 and H == W
-        dx = 1.0 / (H - 1)
-
-        K = x[:, 0]
-        p = x[:, 1]
-
-        dp_dy, dp_dx = torch.gradient(p, dim=(1, 2), spacing=(dx, dx), edge_order=2)
-        ux = -K * dp_dx
-        uy = -K * dp_dy
-        dux_dx = torch.gradient(ux, dim=(2,), spacing=(dx,), edge_order=2)[0]
-        duy_dy = torch.gradient(uy, dim=(1,), spacing=(dx,), edge_order=2)[0]
-        div_u = dux_dx + duy_dy
-        div_K_grad_p = -div_u
-
-        f = self.darcy_source(H, W, r=10.0, w_frac=0.125, device=x.device, dtype=x.dtype)
-        f = f.unsqueeze(0).expand(B, -1, -1)
-        return div_K_grad_p + f
-
     def create_trapezoidal_weights(self):
         # identify corner nodes
         trapezoidal_weights = torch.zeros((1, self.pixels_per_dim, self.pixels_per_dim))
@@ -133,6 +113,70 @@ class DarcyLoss(PDE_loss):
         trapezoidal_weights *= (1./self.pixels_per_dim)**2 / 4.
         trapezoidal_weights = generalized_image_to_b_xy_c(trapezoidal_weights)
         return trapezoidal_weights
+    
+    def compute_residual_field(self, x0_pred):
+        assert len(x0_pred.shape) == 4, 'Model output must be a tensor shaped as an image (with explicit axes for the spatial dimensions).'
+        batch_size, output_dim, pixels_per_dim, pixels_per_dim = x0_pred.shape
+
+        p = x0_pred[:, 0]
+        permeability_field = x0_pred[:, 1]
+        p_d0 = self.grads.stencil_gradients(p, mode='d_d0')
+        p_d1 = self.grads.stencil_gradients(p, mode='d_d1')
+        grad_p = torch.stack([p_d0, p_d1], dim=-3)
+        p_d00 = self.grads.stencil_gradients(p, mode='d_d00')
+        p_d11 = self.grads.stencil_gradients(p, mode='d_d11')
+        perm_d0 = self.grads.stencil_gradients(permeability_field, mode='d_d0')
+        perm_d1 = self.grads.stencil_gradients(permeability_field, mode='d_d1')
+        velocity_jacobian = torch.zeros(batch_size, output_dim, self.input_dim, pixels_per_dim, pixels_per_dim, device=x0_pred.device, dtype=x0_pred.dtype)
+        velocity_jacobian[:, 0, 0] = -permeability_field * p_d00 - perm_d0 * p_d0
+        velocity_jacobian[:, 1, 1] = -permeability_field * p_d11 - perm_d1 * p_d1
+        x0_pred = generalized_image_to_b_xy_c(x0_pred)
+        grad_p = generalized_image_to_b_xy_c(grad_p)
+        velocity_jacobian = generalized_image_to_b_xy_c(velocity_jacobian)
+
+        # obtain equilibrium equations for residual
+        eq_0 = velocity_jacobian[:,:, 0, 0] + velocity_jacobian[:, :, 1, 1] - self.f_s
+        residual = eq_0
+
+        p_int = self.trapezoidal_weights * x0_pred[..., 0].detach()
+        correction = ein.reduce(p_int, 'b ... -> b 1', 'sum')
+
+        x0_pred_zero_p = x0_pred[:,:,0] - correction
+        x0_pred_zero_p = torch.stack([x0_pred_zero_p, x0_pred[:,:,1]], dim=-1)
+        x0_pred = x0_pred_zero_p
+
+        # manually add BCs
+        # reshape output to match image shape
+        grad_p_img = generalized_b_xy_c_to_image(grad_p)
+        residual_bc = torch.zeros_like(grad_p_img)
+        residual_bc[:,0,0,:] = -grad_p_img[:,0,0,:] # xmin / top (acc. to matplotlib visualization)
+        residual_bc[:,0,-1,:] = grad_p_img[:,0,-1,:] # xmax / bot
+        residual_bc[:,1,:,0] = grad_p_img[:,1,:,0] # ymin / left
+        residual_bc[:,1,:,-1] = -grad_p_img[:,1,:,-1] # ymax / right
+
+        residual_bc = generalized_image_to_b_xy_c(residual_bc)
+        residual = torch.cat([eq_0.unsqueeze(-1), residual_bc], dim=-1)
+        return residual
+
+    def compute_residual_field_for_plot(self, x0_pred):
+        """
+        Compute a per-pixel residual field suitable for plotting (like Fig. 3).
+        
+        Parameters
+        ----------
+        x0_pred : torch.Tensor
+            Shape: (B, C, H, W), with channels [0] = p, [1] = permeability.
+
+        Returns
+        -------
+        residual_field : torch.Tensor
+            Shape: (B, 1, H, W). For each batch element, this is the
+            mean absolute residual over all constraints at each pixel.
+        """
+        residual = self.compute_residual_field(x0_pred)
+        residual = generalized_b_xy_c_to_image(residual)
+
+        return residual.abs().mean(dim=1)
 
     def compute_residual(self, x0_pred):
         assert len(x0_pred.shape) == 4, 'Model output must be a tensor shaped as an image (with explicit axes for the spatial dimensions).'
@@ -290,7 +334,7 @@ class VorticityLoss(PDE_loss):
 
     def compute_residual_geostrophic_wind(self, x0_previous, x0_change_pred):
         """
-        Residual of Holton eq. 6.66
+        Residual of Holton eq. 6.58
         
         :param self: Description
         :param x0_previous: Description
@@ -311,7 +355,7 @@ class VorticityLoss(PDE_loss):
 
     def compute_residual_planetary_vorticity(self, x0_previous, x0_change_pred):
         """
-        Residual of Holton eq. 6.66
+        Residual of Holton eq. 6.65
         
         :param self: Description
         :param x0_previous: Description
