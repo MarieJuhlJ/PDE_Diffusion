@@ -75,7 +75,7 @@ def plot_darcy_samples(model, model_id, out_dir=Path('./reports/figures')):
     fig.colorbar(im0, ax=axs[0], fraction=0.046, pad=0.04)
 
     # Plot #2
-    im1 = axs[1].imshow(samples[0, 1], cmap='magma')
+    im1 = axs[1].imshow(np.rot90(samples[0, 1], k=3), cmap='magma')
     axs[1].set_title(r'Pressure - $P$')
     axs[1].axis('off')
     fig.colorbar(im1, ax=axs[1], fraction=0.046, pad=0.04)
@@ -329,7 +329,7 @@ def visualize_time_series(dataset, variable, level=500, dir=Path("./reports/figu
     plt.savefig(plot_path, bbox_inches='tight', pad_inches=0.05)
     print(f"Saved time series plot to {plot_path}")
 
-def plot_darcy_val_metrics(model_id_1, model_id_2, fold_id, log_path, out_dir, smooth_window=10):
+def plot_darcy_val_metrics(model_id_1, model_id_2, fold_num, log_path, out_dir, smooth_window=10):
     import numpy as np
     import pandas as pd
     import matplotlib.pyplot as plt
@@ -352,6 +352,14 @@ def plot_darcy_val_metrics(model_id_1, model_id_2, fold_id, log_path, out_dir, s
     diffusion_ci    = "#9AD1C5"   # light teal
     pidm_color      = "#E76F51"   # warm coral
     pidm_ci         = "#F4A261"   # light orange
+    train_loss_pidm_color = "#EC46DB"
+    train_loss_pidm_ci    = "#D378CA"
+    val_loss_pidm_color   = "#DE2B37"
+    val_loss_pidm_ci      = "#DD6069"
+    train_loss_diff_color = "#2341EC"
+    train_loss_diff_ci    = "#6955EE"
+    val_loss_diff_color   = "#E9AF11"
+    val_loss_diff_ci      = "#E0BC58"
 
     def moving_average_2d(arr, window):
         """Apply moving average along the time axis for a 2D array [fold, time]."""
@@ -365,9 +373,11 @@ def plot_darcy_val_metrics(model_id_1, model_id_2, fold_id, log_path, out_dir, s
     def load_model_stats(model_id, smooth_window=1):
         residual_errors = []
         weighted_mse_errors = []
+        train_loss = []
+        val_loss = []
         steps = None
 
-        for fold in range(1, fold_id + 1):
+        for fold in range(1, fold_num + 1):
             current_model_id = f"{model_id}-{fold}"
             csv_path = Path(log_path) / current_model_id / "version_0" / "metrics.csv"
 
@@ -383,13 +393,19 @@ def plot_darcy_val_metrics(model_id_1, model_id_2, fold_id, log_path, out_dir, s
 
             residual_errors.append(df["val_darcy_residual"].dropna().values)
             weighted_mse_errors.append(df["val_mse_(weighted)"].dropna().values)
+            train_loss.append(df["train_loss"].dropna().values)
+            val_loss.append(df["val_loss"].dropna().values)
 
         residual_errors = np.array(residual_errors)      # shape: [fold, time]
         weighted_mse_errors = np.array(weighted_mse_errors)
+        train_loss = np.array(train_loss)
+        val_loss = np.array(val_loss)
 
         # --- Smooth over time (epochs) ---
         residual_errors = moving_average_2d(residual_errors, smooth_window)
         weighted_mse_errors = moving_average_2d(weighted_mse_errors, smooth_window)
+        train_loss = moving_average_2d(train_loss, smooth_window)
+        val_loss = moving_average_2d(val_loss, smooth_window)
 
         n = residual_errors.shape[0]
 
@@ -403,6 +419,17 @@ def plot_darcy_val_metrics(model_id_1, model_id_2, fold_id, log_path, out_dir, s
         mse_low = mse_mean - 1.96 * mse_std / np.sqrt(n)
         mse_high = mse_mean + 1.96 * mse_std / np.sqrt(n)
 
+        train_loss_mean = train_loss.mean(axis=0)
+        train_loss_std = train_loss.std(axis=0)
+        val_loss_mean = val_loss.mean(axis=0)
+        val_loss_std = val_loss.std(axis=0)
+
+        train_loss_low = train_loss_mean - 1.96 * train_loss_std / np.sqrt(n)
+        train_loss_high = train_loss_mean + 1.96 * train_loss_std / np.sqrt(n)
+        val_loss_low = val_loss_mean - 1.96 * val_loss_std / np.sqrt(n)
+        val_loss_high = val_loss_mean + 1.96 * val_loss_std / np.sqrt(n)
+
+
         # Number of *smoothed* points
         epochs = res_mean.shape[0]
 
@@ -414,6 +441,12 @@ def plot_darcy_val_metrics(model_id_1, model_id_2, fold_id, log_path, out_dir, s
             "mse_mean": mse_mean,
             "mse_low": mse_low,
             "mse_high": mse_high,
+            "train_loss_mean": train_loss_mean,
+            "train_loss_low": train_loss_low,
+            "train_loss_high": train_loss_high,
+            "val_loss_mean": val_loss_mean,
+            "val_loss_low": val_loss_low,
+            "val_loss_high": val_loss_high,
         }
 
     out_dir = Path(out_dir)
@@ -425,7 +458,7 @@ def plot_darcy_val_metrics(model_id_1, model_id_2, fold_id, log_path, out_dir, s
     epochs = min(stats1["epochs"], stats2["epochs"])
     x = np.arange(epochs)
 
-    fig, axes = plt.subplots(1, 2, sharex=True)
+    fig, axes = plt.subplots(1, 3, sharex=True)
 
     # ---------------- Residual ----------------
     ax = axes[0]
@@ -501,6 +534,70 @@ def plot_darcy_val_metrics(model_id_1, model_id_2, fold_id, log_path, out_dir, s
     ax.set_yscale("log")
     ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
 
+    ax = axes[2]
+
+    # Train loss
+    ax.plot(x, stats1["train_loss_mean"][:epochs],
+            label="Train loss mean",
+            linewidth=2.2,
+            color=train_loss_diff_color)
+    ax.fill_between(
+        x,
+        stats1["train_loss_low"][:epochs],
+        stats1["train_loss_high"][:epochs],
+        alpha=0.3,
+        color=train_loss_diff_ci,
+        label="Train loss 95% CI (Diffusion)",
+    )
+
+    # Val loss
+    ax.plot(x, stats1["val_loss_mean"][:epochs],
+            label="Val loss mean",
+            linewidth=2.2,
+            color=val_loss_diff_color)
+    ax.fill_between(
+        x,
+        stats1["val_loss_low"][:epochs],
+        stats1["val_loss_high"][:epochs],
+        alpha=0.3,
+        color=val_loss_diff_ci,
+        label="Val loss 95% CI (Diffusion)",
+    )
+
+    ax.plot(x, stats2["train_loss_mean"][:epochs],
+            label="Train loss mean",
+            linewidth=2.2,
+            color=train_loss_pidm_color)
+    ax.fill_between(
+        x,
+        stats2["train_loss_low"][:epochs],
+        stats2["train_loss_high"][:epochs],
+        alpha=0.3,
+        color=train_loss_pidm_ci,
+        label="Train loss 95% CI (PIDM)",
+    )
+
+    # Val loss
+    ax.plot(x, stats2["val_loss_mean"][:epochs],
+            label="Val loss mean",
+            linewidth=2.2,
+            color=val_loss_pidm_color)
+    ax.fill_between(
+        x,
+        stats2["val_loss_low"][:epochs],
+        stats2["val_loss_high"][:epochs],
+        alpha=0.3,
+        color=val_loss_pidm_ci,
+        label="Val loss 95% CI (PIDM)",
+    )
+
+    ax.set_xlabel(f"Epoch (smoothed, window={smooth_window})")
+    ax.set_ylabel(r"$\mathbb{E}_{t, \mathbf{x_0}}[\lambda_t \|\mathbf{x_0} - \hat{\mathbf{x}}_0\|^2] + \frac{1}{2 \tilde{\Sigma}} || \mathcal{R}(\mathbf{x}_0^*)(\mathbf{x}_t,t)||^2$")
+    ax.set_title("Train vs Validation loss")
+    ax.set_yscale("log")
+    ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
+
+
     # Improve spacing
     fig.tight_layout(rect=[0, 0.0, 1, 0.95])
 
@@ -547,21 +644,22 @@ if __name__ == "__main__":
     from pde_diff.utils import DatasetRegistry, LossRegistry
 
     model_path = Path('./models')
-    model_id = 'exp1-aaaaa'
-    model_id_2 = 'exp1-aaaab'
+    model_id = 'exp1-aaaad'
+    model_id_2 = 'exp1-aaaaf'
     # cfg = OmegaConf.load(model_path / (model_id) / "config.yaml")
     # diffusion_model = DiffusionModel(cfg)
     # diffusion_model.load_model(model_path / model_id / f"best-val_loss-weights.pt")
     # plot_darcy_samples(diffusion_model, model_id, Path('./reports/figures') / model_id)
 
-    # plot_darcy_val_metrics(
-    #     model_id_1=model_id,
-    #     model_id_2=model_id_2,
-    #     fold_id=5,
-    #     log_path="logs",
-    #     out_dir=f"reports/figures/{model_id}",
-    #     smooth_window=20,
-    # )
+    plot_darcy_val_metrics(
+        model_id_1=model_id,
+        model_id_2=model_id_2,
+        fold_num=5,
+        log_path="logs",
+        out_dir=f"reports/figures/{model_id}",
+        smooth_window=20,
+    )
+    breakpoint()
 
     cfg = OmegaConf.load(model_path / model_id / "config.yaml")
     dataset = DatasetRegistry.create(cfg.dataset)

@@ -3,6 +3,7 @@ path: ./data/era5/zarr/
 use_double: False
 time_series: True
 validation_metrics: ['mse', 'era5_vorticity']
+test_metrics: [mse]
 dims:
   x: 480
   y: 32

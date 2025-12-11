@@ -3,6 +3,7 @@ path: ./data/darcy/
 use_double: False
 time_series: False
 validation_metrics: ['mse', 'darcy']
+test_metrics: [mse]
 dims:
   x: 64
   y: 64

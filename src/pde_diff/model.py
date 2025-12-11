@@ -7,11 +7,11 @@ from pathlib import Path
 
 from pde_diff.data.datasets import increment_clock_features
 
-# Imports for registries
 from pde_diff.utils import SchedulerRegistry, LossRegistry, ModelRegistry, init_means_and_stds_era5
 import pde_diff.scheduler
 import pde_diff.loss
 from pde_diff.data import datasets
+from pde_diff.unet_model import Unet3D
 
 
 class DiffusionModel(pl.LightningModule):
@@ -63,6 +63,7 @@ class DiffusionModel(pl.LightningModule):
         self.loss_fn.c_data = self.scheduler.p2_loss_weight[steps] #https://arxiv.org/pdf/2303.09556.pdf
         loss = self.loss_fn(model_out=model_out, target=state, x0_hat=x0_hat, var=variance)
         self.log("train_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
+        self.additional_validation_metrics(model_out, state, x0_hat, steps, validation=False)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -108,24 +109,31 @@ class DiffusionModel(pl.LightningModule):
         self.log("test_loss", loss, prog_bar=True, batch_size=model_out.size(0))
         self.additional_validation_metrics(model_out, target, steps)
 
-    def additional_validation_metrics(self, model_out, target, x0_hat, steps):
-        metrics = self.cfg.dataset.validation_metrics
-        for metric_name in metrics:
-            if metric_name == "mse":
-                mse = (self.mse(model_out, target) * self.scheduler.p2_loss_weight[steps][:, None, None, None]).mean()
-                self.log("val_mse_(weighted)", mse, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
+    def additional_validation_metrics(self, model_out, target, x0_hat, steps, validation=True):
+        if validation:
+            metrics = self.cfg.dataset.validation_metrics
+            for metric_name in metrics:
+                if metric_name == "mse":
+                    mse = (self.mse(model_out, target) * self.scheduler.p2_loss_weight[steps][:, None, None, None]).mean()
+                    self.log("val_mse_(weighted)", mse, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
 
-            if metric_name == 'era5_vorticity':
-                assert self.cfg.loss.name == 'vorticity', "era5_vorticity metric can only be used with vorticity loss"
-                num_channels = x0_hat.shape[1]
-                x0_previous = x0_hat[:, :num_channels//2, :, :]
-                x0_change_pred = x0_hat[:, num_channels//2:, :, :]
-                residual_planetary = self.loss_fn.compute_residual_planetary_vorticity(x0_previous, x0_change_pred).pow(2).mean()
-                residual_geo_wind = self.loss_fn.compute_residual_geostrophic_wind(x0_previous, x0_change_pred).pow(2).mean()
-                residual_qgpv = self.loss_fn.compute_residual_qgpv(x0_previous, x0_change_pred).pow(2).mean()
-                self.log("val_era5_planetary_residual", residual_planetary, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
-                self.log("val_era5_geo_wind_residual", residual_geo_wind, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
-                self.log("val_era5_qgpv_residual", residual_qgpv, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
+                if metric_name == 'era5_vorticity':
+                    assert self.cfg.loss.name == 'vorticity', "era5_vorticity metric can only be used with vorticity loss"
+                    num_channels = x0_hat.shape[1]
+                    x0_previous = x0_hat[:, :num_channels//2, :, :]
+                    x0_change_pred = x0_hat[:, num_channels//2:, :, :]
+                    residual_planetary = self.loss_fn.compute_residual_planetary_vorticity(x0_previous, x0_change_pred).pow(2).mean()
+                    residual_geo_wind = self.loss_fn.compute_residual_geostrophic_wind(x0_previous, x0_change_pred).pow(2).mean()
+                    residual_qgpv = self.loss_fn.compute_residual_qgpv(x0_previous, x0_change_pred).pow(2).mean()
+                    self.log("val_era5_planetary_residual", residual_planetary, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
+                    self.log("val_era5_geo_wind_residual", residual_geo_wind, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
+                    self.log("val_era5_qgpv_residual", residual_qgpv, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
+        else:
+            metrics = self.cfg.dataset.test_metrics
+            for metric_name in metrics:
+                if metric_name == "mse":
+                    mse = (self.mse(model_out, target) * self.scheduler.p2_loss_weight[steps][:, None, None, None]).mean()
+                    self.log("train_mse_(weighted)", mse, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
 
     def on_validation_epoch_end(self):
         """For on_epoch_end validation metrics"""
@@ -257,6 +265,34 @@ class DummyModel(torch.nn.Module):
         x = torch.relu(self.layer1(x))
         x = self.layer2(x)
         return x
+
+@ModelRegistry.register("unet3d")
+class UNet3DWrapper(torch.nn.Module):
+    def __init__(self, cfg_list):
+        super().__init__()
+        model_hp, hp_params = cfg_list[0], cfg_list[1]
+        self.unet = Unet3D(dim = 32, channels = model_hp.dims.output_dims)
+
+    def forward(self, x, t):
+        return self.unet(x, t)
+
+@ModelRegistry.register("unet3d_conditional")
+class UNet3DWrapper(torch.nn.Module):
+    def __init__(self, cfg_list):
+        super().__init__()
+        model_hp, hp_params = cfg_list[0], cfg_list[1]
+        in_channels = int(model_hp.dims.input_dims)
+        out_channels = int(model_hp.dims.output_dims)
+        self.unet = Unet3D(dim = 32, channels=in_channels, out_dim = out_channels)
+
+    def forward(self, x, t):
+        cond_channels = self.in_channels - self.out_channels
+        conditionals = x[:, :cond_channels, :, :]
+        batch_size, cond_channels, height, width = conditionals.shape
+        conditionals = conditionals.view(batch_size, cond_channels, height * width).permute(0, 2, 1)
+        inputs = x[:, cond_channels:, :, :]
+        return self.unet(x = inputs, t = t, cond = conditionals)
+        
 
 @ModelRegistry.register("unet2d")
 class UNet2DWrapper(torch.nn.Module):
