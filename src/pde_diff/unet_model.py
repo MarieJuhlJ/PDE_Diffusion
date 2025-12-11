@@ -431,7 +431,7 @@ class Unet3D(nn.Module):
         time_dim = dim * 4
 
         self.cond_bias = cond_bias
-        self.cond_dim = cond_dim
+        self.cond_dim = cond_dim if cond_dim else time_dim
         self.cond_to_time = cond_to_time
         self.padding_mode = padding_mode
 
@@ -518,7 +518,7 @@ class Unet3D(nn.Module):
 
         # gradient embedding as in 'A physics-informed diffusion model for high-fidelity flow field reconstruction'
         self.emb_conv = nn.Sequential(
-            torch.nn.Conv2d(cond_dim, init_dim, kernel_size=1, stride=1, padding=0),
+            torch.nn.Conv2d(self.cond_dim, init_dim, kernel_size=1, stride=1, padding=0),
             nn.GELU(),
             torch.nn.Conv2d(init_dim, init_dim, kernel_size=3, stride=1, padding=1, padding_mode='zeros')
         )
