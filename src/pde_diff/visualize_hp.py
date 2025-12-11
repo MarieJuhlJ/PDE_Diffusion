@@ -4,6 +4,7 @@ Functions for visualizing the results of hyperparameter optimization with optuna
 import os
 import sys
 
+import matplotlib.pyplot as plt
 import optuna
 
 if __name__ == "__main__":
@@ -11,20 +12,33 @@ if __name__ == "__main__":
     os.makedirs(dir, exist_ok=True)
 
     study_name = sys.argv[1]
-    study_path = f"sqlite:///{study_name}.db"
+    study_path =  "sqlite:///"+sys.argv[2]
+    print(study_name, study_path)
     study = optuna.load_study(study_name=study_name, storage=study_path)
 
-    fig = optuna.visualization.plot_contour(study, params=["learning_rate", "weight_decay"])
-    fig.savefig(f"{dir}{study_name}_contour.png")
+    # Contour plot
+    ax = optuna.visualization.matplotlib.plot_contour(
+        study, params=["lr", "weight_decay"]
+    )
+    ax.figure.set_size_inches(6, 3)
+    ax.figure.savefig(f"{dir}{study_name}_contour.png", bbox_inches="tight")
 
-    fig = optuna.visualization.plot_parallel_coordinate(study)
-    fig.savefig(f"{dir}{study_name}_parallel_coordinate.png")
+    # Parallel coordinate plot
+    ax = optuna.visualization.matplotlib.plot_parallel_coordinate(study)
+    ax.figure.set_size_inches(6, 3)
+    ax.figure.savefig(f"{dir}{study_name}_parallel_coordinate.png", bbox_inches="tight")
 
-    fig = optuna.visualization.plot_timeline(study)
-    fig.savefig(f"{dir}{study_name}_timeline.png")
+    # Timeline plot
+    ax = optuna.visualization.matplotlib.plot_timeline(study)
+    ax.figure.set_size_inches(6, 3)
+    ax.figure.savefig(f"{dir}{study_name}_timeline.png", bbox_inches="tight")
 
-    fig = optuna.visualization.plot_param_importances(study)
-    fig.savefig(f"{dir}{study_name}_param_importances.png")
+    # Parameter importances plot
+    ax = optuna.visualization.matplotlib.plot_param_importances(study)
+    ax.figure.set_size_inches(6, 3)
+    ax.figure.savefig(f"{dir}{study_name}_param_importances.png", bbox_inches="tight")
 
-    fig = optuna.visualization.plot_intermediate_values(study)
-    fig.savefig(f"{dir}{study_name}_intermediate_values.png")
+    # Intermediate values plot
+    ax = optuna.visualization.matplotlib.plot_intermediate_values(study)
+    ax.figure.set_size_inches(6, 3)
+    ax.figure.savefig(f"{dir}{study_name}_intermediate_values.png", bbox_inches="tight")

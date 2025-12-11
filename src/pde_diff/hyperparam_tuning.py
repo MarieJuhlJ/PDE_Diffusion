@@ -28,22 +28,15 @@ class ObjectiveFunction(object):
 
     def __call__(self, trial: optuna.trial.Trial):
         # Suggest hyperparameters
-        batch_size = trial.suggest_categorical("batch_size", [8,16,32,64])
-        learning_rate = trial.suggest_float("lr", 1e-5, 1e-2, log=True)
-        weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-2, log=True)
-        print(f"Trial {trial.number}: batch_size={batch_size}, lr={learning_rate}, weight_decay={weight_decay}")
-
-        self.cfg.experiment.hyperparameters.batch_size = batch_size
-        self.cfg.experiment.hyperparameters.lr = learning_rate
-        self.cfg.experiment.hyperparameters.weight_decay = weight_decay
+        self.suggest_from_config(trial, self.cfg)
 
         dataset = DatasetRegistry.create(self.cfg.dataset)
         model = DiffusionModel(self.cfg)
 
         dataset_train, dataset_val = split_dataset(self.cfg, dataset)
 
-        train_dataloader = DataLoader(dataset_train, batch_size=batch_size, shuffle=True, num_workers=4,persistent_workers=True)
-        val_dataloader = DataLoader(dataset_val, batch_size=batch_size, shuffle=False, num_workers=4,persistent_workers=True)
+        train_dataloader = DataLoader(dataset_train, batch_size=self.cfg.experiment.hyperparameters.batch_size, shuffle=True, num_workers=4,persistent_workers=True)
+        val_dataloader = DataLoader(dataset_val, batch_size=self.cfg.experiment.hyperparameters.batch_size, shuffle=False, num_workers=4,persistent_workers=True)
 
         acc = "gpu" if torch.cuda.is_available() else "cpu"
 
@@ -76,14 +69,35 @@ class ObjectiveFunction(object):
 
         return val_loss
 
+    def suggest_from_config(self, trial: optuna.trial.Trial, config: DictConfig):
+        for param_name, param_cfg in config.hp_study.params.items():
+            print(f"Suggesting parameter {param_name} of type {param_cfg.type} with config {param_cfg}")
+            if param_cfg.type == "categorical":
+                suggestion = trial.suggest_categorical(param_name, list(param_cfg.choices))
+            elif param_cfg.type == "float":
+                suggestion = trial.suggest_float(param_name, param_cfg.low, param_cfg.high, log=param_cfg.get("log", False))
+            elif param_cfg.type == "int":
+                suggestion = trial.suggest_int(param_name, param_cfg.low, param_cfg.high, log=param_cfg.get("log", False))
+            else:
+                raise ValueError(f"Unknown parameter type: {param_cfg.type}")
+            print(f"Trial {trial.number} suggests {param_name}: {suggestion}")
+            self.cfg.experiment.hyperparameters[param_name] = suggestion
+
 @hydra.main(version_base=None, config_name="config.yaml", config_path="../../configs")
 def run_optimization(cfg: DictConfig):
-    storage_url = "sqlite:///hp_param_study.db"
+    hp_cfg = cfg.hp_study
 
-    cfg.n_trials = cfg.get("n_trials", 20)
-    pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=10, n_min_trials=5)
-    study = optuna.create_study(study_name="hp_tuning", direction='minimize', pruner=pruner, storage=storage_url, load_if_exists=True)
-    study.optimize(ObjectiveFunction(cfg), n_trials=cfg.n_trials, show_progress_bar=True)
+    storage_url = f"sqlite:///{hp_cfg.name}.db"
+
+    pruner = optuna.pruners.MedianPruner(n_startup_trials=hp_cfg.pruner.n_startup_trials,
+                                         n_warmup_steps=hp_cfg.pruner.n_warmup_steps,
+                                         n_min_trials=hp_cfg.pruner.n_min_trials)
+    study = optuna.create_study(study_name=hp_cfg.name,
+                                direction='minimize',
+                                pruner=pruner,
+                                storage=storage_url,
+                                load_if_exists=True)
+    study.optimize(ObjectiveFunction(cfg), n_trials=hp_cfg.n_trials, show_progress_bar=True)
 
     print("Best trial:")
     trial = study.best_trial
