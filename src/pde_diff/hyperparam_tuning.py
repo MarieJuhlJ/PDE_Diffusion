@@ -28,9 +28,10 @@ class ObjectiveFunction(object):
 
     def __call__(self, trial: optuna.trial.Trial):
         # Suggest hyperparameters
-        batch_size = trial.suggest_categorical("batch_size", [4,8,16])
+        batch_size = trial.suggest_categorical("batch_size", [8,16,32,64])
         learning_rate = trial.suggest_float("lr", 1e-5, 1e-2, log=True)
         weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-2, log=True)
+        print(f"Trial {trial.number}: batch_size={batch_size}, lr={learning_rate}, weight_decay={weight_decay}")
 
         self.cfg.experiment.hyperparameters.batch_size = batch_size
         self.cfg.experiment.hyperparameters.lr = learning_rate
