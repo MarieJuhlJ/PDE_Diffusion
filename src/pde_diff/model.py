@@ -277,21 +277,20 @@ class UNet3DWrapper(torch.nn.Module):
         return self.unet(x, t)
 
 @ModelRegistry.register("unet3d_conditional")
-class UNet3DWrapper(torch.nn.Module):
+class UNet3DWrapperConditional(torch.nn.Module):
     def __init__(self, cfg_list):
         super().__init__()
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model_hp, hp_params = cfg_list[0], cfg_list[1]
-        in_channels = int(model_hp.dims.input_dims)
-        out_channels = int(model_hp.dims.output_dims)
-        self.unet = Unet3D(dim = 32, channels=in_channels, out_dim = out_channels)
+        self.in_channels = int(model_hp.dims.input_dims)
+        self.out_channels = int(model_hp.dims.output_dims)
+        self.unet = Unet3D(dim = 32, channels=self.out_channels, out_dim=self.out_channels, cond_dim=self.in_channels - self.out_channels).to(device)
 
     def forward(self, x, t):
         cond_channels = self.in_channels - self.out_channels
         conditionals = x[:, :cond_channels, :, :]
-        batch_size, cond_channels, height, width = conditionals.shape
-        conditionals = conditionals.view(batch_size, cond_channels, height * width).permute(0, 2, 1)
         inputs = x[:, cond_channels:, :, :]
-        return self.unet(x = inputs, t = t, cond = conditionals)
+        return self.unet(x = inputs, time = t, cond = conditionals)
         
 
 @ModelRegistry.register("unet2d")

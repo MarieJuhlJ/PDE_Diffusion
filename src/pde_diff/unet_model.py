@@ -253,7 +253,6 @@ class ResnetBlock(nn.Module):
         self.res_conv = nn.Conv3d(dim, dim_out, 1) if dim != dim_out else nn.Identity()
 
     def forward(self, x, time_emb = None):
-
         scale_shift = None
         if exists(self.mlp):
             assert exists(time_emb), 'time emb must be passed in'
@@ -408,6 +407,7 @@ class Unet3D(nn.Module):
         self,
         dim,
         out_dim = None,
+        cond_dim = None,
         dim_mults=(1, 2, 4, 8),
         channels = 2,
         self_condition = False,
@@ -431,7 +431,7 @@ class Unet3D(nn.Module):
         time_dim = dim * 4
 
         self.cond_bias = cond_bias
-        self.cond_dim = time_dim
+        self.cond_dim = cond_dim
         self.cond_to_time = cond_to_time
         self.padding_mode = padding_mode
 
@@ -478,23 +478,22 @@ class Unet3D(nn.Module):
 
         # block type
         block_klass = partial(ResnetBlock, padding_mode = self.padding_mode, groups = resnet_groups)
-        block_klass_cond = partial(block_klass, time_emb_dim = time_dim + int(self.cond_dim or 0) if self.cond_to_time == 'concat' else self.cond_dim)
+        block_klass_cond = partial(block_klass, time_emb_dim = time_dim + int(self.cond_dim or 0) if self.cond_to_time == 'concat' else time_dim)
 
         # modules for all layers
         for ind, (dim_in, dim_out) in enumerate(in_out):
             is_last = ind >= (num_resolutions - 1)
-
             self.downs.append(nn.ModuleList([
                 block_klass_cond(dim_in, dim_out),
                 block_klass_cond(dim_out, dim_out),
-                Residual(PreNorm(dim_out, SpatialLinearAttention(dim_out, heads = attn_heads, cond_dim = self.cond_dim))) if use_sparse_linear_attn else nn.Identity(),
+                Residual(PreNorm(dim_out, SpatialLinearAttention(dim_out, heads = attn_heads, cond_dim = init_dim))) if use_sparse_linear_attn else nn.Identity(),
                 Downsample(dim_out, self.padding_mode) if not is_last else nn.Identity()
             ]))
 
         mid_dim = dims[-1]
         self.mid_block1 = block_klass_cond(mid_dim, mid_dim)
 
-        spatial_attn = EinopsToAndFrom('b c f h w', 'b f (h w) c', Attention(mid_dim, heads = attn_heads, cond_dim = self.cond_dim))
+        spatial_attn = EinopsToAndFrom('b c f h w', 'b f (h w) c', Attention(mid_dim, heads = attn_heads, cond_dim = init_dim))
 
         self.mid_spatial_attn = Residual(PreNorm(mid_dim, spatial_attn))
         self.mid_temporal_attn = Residual(PreNorm(mid_dim, temporal_attn(mid_dim)))
@@ -507,7 +506,7 @@ class Unet3D(nn.Module):
             self.ups.append(nn.ModuleList([
                 block_klass_cond(dim_out * 2, dim_in),
                 block_klass_cond(dim_in, dim_in),
-                Residual(PreNorm(dim_in, SpatialLinearAttention(dim_in, heads = attn_heads, cond_dim = self.cond_dim))) if use_sparse_linear_attn else nn.Identity(),
+                Residual(PreNorm(dim_in, SpatialLinearAttention(dim_in, heads = attn_heads, cond_dim = init_dim))) if use_sparse_linear_attn else nn.Identity(),
                 Upsample(dim_in, self.padding_mode) if not is_last else nn.Identity()
             ]))
 
@@ -519,7 +518,7 @@ class Unet3D(nn.Module):
 
         # gradient embedding as in 'A physics-informed diffusion model for high-fidelity flow field reconstruction'
         self.emb_conv = nn.Sequential(
-            torch.nn.Conv2d(channels, init_dim, kernel_size=1, stride=1, padding=0),
+            torch.nn.Conv2d(cond_dim, init_dim, kernel_size=1, stride=1, padding=0),
             nn.GELU(),
             torch.nn.Conv2d(init_dim, init_dim, kernel_size=3, stride=1, padding=1, padding_mode='zeros')
         )
@@ -572,17 +571,10 @@ class Unet3D(nn.Module):
             # classifier free guidance
             batch, device = x.shape[0], x.device
             mask = prob_mask_like((batch,), null_cond_prob, device=device)
-            
-            if len(cond.shape) == 3:
-                label_mask_embed = rearrange(mask, 'b -> b 1 1')
-                null_cond = torch.zeros_like(cond)
-                cond = torch.where(label_mask_embed, null_cond, cond)
-                cond = generalized_b_xy_c_to_image(cond)
-                cond_emb = self.emb_conv(cond)
-                cond = cond
-            else:
-                raise ValueError('Input must be [BxP*PxC].')
-            
+            label_mask_embed = rearrange(mask, 'b -> b 1 1 1')
+            null_cond = torch.zeros_like(cond)
+            cond = torch.where(label_mask_embed, null_cond, cond)
+            cond_emb = self.emb_conv(cond)
             x = torch.cat((x.squeeze(2), cond_emb), dim=1) # concatenate to channel dimension
             x = self.combine_conv(x).unsqueeze(2)
 
