@@ -2,6 +2,7 @@ defaults:
   - experiment: exp1
   - dataset: era5
   - scheduler: ddpm
+  - hp_study: null
   - _self_
 
 wandb: False #Avoid logging to wandb
@@ -10,9 +11,6 @@ idx_fold: null
 seed: 42
 id: null
 save_dir: 'models/'
-
-# for hp tuning
-n_trials: null
 
 loss:
   name: mse
