@@ -71,7 +71,6 @@ class ObjectiveFunction(object):
 
     def suggest_from_config(self, trial: optuna.trial.Trial, config: DictConfig):
         for param_name, param_cfg in config.hp_study.params.items():
-            print(f"Suggesting parameter {param_name} of type {param_cfg.type} with config {param_cfg}")
             if param_cfg.type == "categorical":
                 suggestion = trial.suggest_categorical(param_name, list(param_cfg.choices))
             elif param_cfg.type == "float":
