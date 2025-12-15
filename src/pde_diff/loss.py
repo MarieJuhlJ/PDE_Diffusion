@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 import einops as ein
 import math
+import json
 from omegaconf import ListConfig
 from pde_diff.utils import LossRegistry, DatasetRegistry, GradientHelper
 from pde_diff.grad_utils import *
@@ -239,7 +240,8 @@ class VorticityLoss(PDE_loss):
                         self.compute_residual_geostrophic_wind,
                         self.compute_residual_qgpv]
         self.cfg = cfg
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device('cpu')
 
         self.Omega = 7.292e-5 # rad s^-1
         self.T_0 = 288.15 #K
@@ -252,6 +254,12 @@ class VorticityLoss(PDE_loss):
         self.p = [45000, 50000, 55000] # (Pa) hardcoded for now
         self.dp = 5000 # (Pa) hardcoded for now
         self.dt = 3600 # (s) hardcoded for now
+
+        try:
+            with open("src/pde_diff/data/residual_stats.json", "r") as f:
+                self.residual_stats = json.load(f)
+        except FileNotFoundError:
+            self.residual_stats = None
 
         nlat = 32  # hardcoded for now
         nlon = 480  # hardcoded for now
@@ -319,6 +327,12 @@ class VorticityLoss(PDE_loss):
         self.diff_mean = torch.as_tensor(diff_mean).to(device)
         self.diff_std = torch.as_tensor(diff_std).to(device)
 
+    def _normalize(self, x, type):
+        assert self.residual_stats is not None, "Residual statistics not loaded."
+        mean = self.residual_stats[type]['mean']
+        std = self.residual_stats[type]['std']
+        return (x - mean) / (std + 1e-9)
+
     def theta_0(self, p):
         return self.T_0 * (self.p_0 / p)**(self.R / self.c_p)
 
@@ -341,7 +355,7 @@ class VorticityLoss(PDE_loss):
         current_state_change = ein.rearrange(current_state_change_unnormalized, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
         return previous_state, current_state_change+previous_state
 
-    def compute_residual_geostrophic_wind(self, x0_previous, x0_change_pred):
+    def compute_residual_geostrophic_wind(self, x0_previous, x0_change_pred, normalize=True):
         """
         Residual of Holton eq. 6.58
         
@@ -360,9 +374,11 @@ class VorticityLoss(PDE_loss):
         wind_geo_u_c = - dphi_dy_c / self.f0
         wind_geo_v_c = dphi_dx_c / self.f0
         residual = wind_geo_u_c - wind_u_c + wind_geo_v_c - wind_v_c
+        if normalize:
+            residual = self._normalize(residual, 'geostrophic_wind')
         return residual
 
-    def compute_residual_planetary_vorticity(self, x0_previous, x0_change_pred):
+    def compute_residual_planetary_vorticity(self, x0_previous, x0_change_pred, normalize=True):
         """
         Residual of Holton eq. 6.65
         
@@ -383,10 +399,12 @@ class VorticityLoss(PDE_loss):
         wind_nabla_dot = wind_geo_u_c + wind_geo_v_c
         dpv_dt = (pv_c - pv_p) / self.dt
         residual = dpv_dt + wind_nabla_dot * pv_c
+        if normalize:
+            residual = self._normalize(residual, 'planetary_vorticity')
         return residual
 
 
-    def compute_residual_qgpv(self, x0_previous, x0_change_pred):
+    def compute_residual_qgpv(self, x0_previous, x0_change_pred, normalize=True):
         """
         Residual of Holton eq. 6.66
 
@@ -407,6 +425,8 @@ class VorticityLoss(PDE_loss):
         A = self.f0 / sigma
         term_vert = self.dx_dp(A) * self.dx_dp(geo_c) + A[:,1] * self.dxx_dpp(geo_c)
         residual = (1/self.f0 * lap_geo + self.f)[:,1] + term_vert - pv_c[:, 1] # Holton 6.66
+        if normalize:
+            residual = self._normalize(residual, 'qgpv')
         return residual
 
     def vorticity_residual_loss(self, x0_hat, var):
