@@ -644,8 +644,8 @@ if __name__ == "__main__":
     from pde_diff.utils import DatasetRegistry, LossRegistry
 
     model_path = Path('./models')
-    model_id = 'exp1-aaaad'
-    model_id_2 = 'exp1-aaaaf'
+    model_id = 'exp1-aaaaa'
+    model_id_2 = 'exp1-aaaab'
     # cfg = OmegaConf.load(model_path / (model_id) / "config.yaml")
     # diffusion_model = DiffusionModel(cfg)
     # diffusion_model.load_model(model_path / model_id / f"best-val_loss-weights.pt")

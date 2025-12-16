@@ -240,8 +240,7 @@ class VorticityLoss(PDE_loss):
                         self.compute_residual_geostrophic_wind,
                         self.compute_residual_qgpv]
         self.cfg = cfg
-        # self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.device = torch.device('cpu')
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.Omega = 7.292e-5 # rad s^-1
         self.T_0 = 288.15 #K
