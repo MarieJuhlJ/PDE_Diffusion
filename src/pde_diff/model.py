@@ -103,11 +103,15 @@ class DiffusionModel(pl.LightningModule):
             noisy_images = torch.cat([conditionals, noisy_images], dim=1)
 
         model_out = self.model(noisy_images, steps)
+        x0_hat = model_out
+        if self.conditional:
+            x0_hat = torch.cat([conditionals[:, 19:34], model_out], dim=1) #hardcoded for now (TODO)
+
         variance = self.scheduler.posterior_variance[steps]
         self.loss_fn.c_data = self.scheduler.p2_loss_weight[steps]
         loss = self.loss_fn(model_out=model_out, target=target, x0_hat=model_out, var=variance)
         self.log("test_loss", loss, prog_bar=True, batch_size=model_out.size(0))
-        self.additional_validation_metrics(model_out, target, steps)
+        self.additional_validation_metrics(model_out, target,x0_hat, steps)
 
     def additional_validation_metrics(self, model_out, target, x0_hat, steps, validation=True):
         if validation:
@@ -189,7 +193,7 @@ class DiffusionModel(pl.LightningModule):
                 current_state = torch.cat([current_state[:,-(self.data_dims.input_dims-self.data_dims.output_dims)//2:,:,:], next_state], dim=1)
             forecasted_states.append(next_state[:,:-4, :, :].cpu())
 
-        return torch.stack(forecasted_states, dim=1)
+        return torch.stack(forecasted_states, dim=0)
 
     def ddim_forward(self, samples, t, t_prev): #this assumes model predicts epsilon
         z = torch.randn_like(samples) if t_prev > 0 else 0
