@@ -1,5 +1,6 @@
 import hydra
 from omegaconf import DictConfig, OmegaConf
+from pathlib import Path
 import torch
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
@@ -43,7 +44,7 @@ def evaluate(cfg: DictConfig):
 
     if cfg.dataset.name in ["era5"]:
         print("Evaluating forecasting performance...")
-        forecasting_losses = evaluate_forecasting(model, dataset_test, steps=cfg.steps, losses=["mse"])
+        forecasting_losses = evaluate_forecasting(model, dataset_test, steps=cfg.steps, losses=["mse"],dir=os.path.join(dir, name))
         # save losses to csv
         for loss_name in forecasting_losses.keys():
             path_csv = os.path.join(dir, name, f"forecasting_losses_{loss_name}.csv")
@@ -73,7 +74,7 @@ def evaluate(cfg: DictConfig):
                 mean_loss = sum(values) / len(values)
                 print(f"Step {step}: {loss_name} = {mean_loss}")
 
-def evaluate_forecasting(model: DiffusionModel, dataset_test: Dataset, steps: int=8, losses: list[str]=["mse", "fb"]) -> dict[str, list[float]]:
+def evaluate_forecasting(model: DiffusionModel, dataset_test: Dataset, steps: int=8, losses: list[str]=["mse", "fb"], dir=Path("reports/figures")) -> dict[str, list[float]]:
 
     dataloader_test = DataLoader(dataset_test,
                                  batch_size=1,
@@ -98,6 +99,9 @@ def evaluate_forecasting(model: DiffusionModel, dataset_test: Dataset, steps: in
             max_steps -= 1
 
             forecasts.append(forecasted_states.detach().cpu())
+
+            if i<3:
+                visualize_era5_sample(forecasted_states[0,8,:,:],variable="t", sample_idx=f"eval{i}", dir=dir)
 
         for loss_name, loss_fn in loss_fns.items():
             for n in range(len(forecasts)):
