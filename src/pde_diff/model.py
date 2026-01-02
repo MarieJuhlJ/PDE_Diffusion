@@ -193,7 +193,7 @@ class DiffusionModel(pl.LightningModule):
                 current_state = torch.cat([current_state[:,-(self.data_dims.input_dims-self.data_dims.output_dims)//2:,:,:], next_state], dim=1)
             forecasted_states.append(next_state[:,:-4, :, :].cpu())
 
-        return torch.stack(forecasted_states, dim=0)
+        return torch.stack(forecasted_states, dim=1)
 
     def ddim_forward(self, samples, t, t_prev): #this assumes model predicts epsilon
         z = torch.randn_like(samples) if t_prev > 0 else 0
