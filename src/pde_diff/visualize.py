@@ -194,6 +194,7 @@ def get_time_series(dataset, variable, level=500, coords=(12.568, 55.676)):
     lon, lat = coords
     lon_idx = np.argmin(np.abs(dataset.grid_lon - lon))
     lat_idx = np.argmin(np.abs(dataset.grid_lat - lat))
+    print(dataset.data[variable].shape)
     time_series = dataset.data[variable][:, level_idx, lon_idx, lat_idx]
     return time_series
 
@@ -210,6 +211,7 @@ def visualize_era5_sample(data_sample, variable, level=500, big_data_sample=None
         sample_idx (int, optional): Index of the sample (for title purposes).
         color_bar_limit (tuple, optional): Tuple of (vmin, vmax) for color bar limits.
     """
+    os.makedirs(dir, exist_ok=True)
     # Plot the data
     fig, ax = plt.subplots(figsize=(6,3))
     ax.set_xlabel("Longitude")
@@ -592,48 +594,51 @@ def plot_and_save_era5(csv_path, out_dir):
 
 if __name__ == "__main__":
     from pde_diff.utils import DatasetRegistry, LossRegistry
+    plot_darcy = False
+    plot_data_samples = True
+    plot_era5_training = False
 
-    # PLOT ERA 5 THINGS:
-    # -------------------------------
-    model_path = Path('./models')
-    model_ids =  ['era5_ext-base','era5_ext-c1e2'] #["era5_ext-base"]#['era5_baseline-v2', 'era5_baseline-c1e1', 'era5_baseline-c1e2','era5_baseline-c1e3']
-    #plot_and_save_era5(f"logs/era5_baseline-v2-1/version_0/metrics.csv", Path(f"reports/figures/{model_id}"))
+    if plot_era5_training:
+        # PLOT ERA 5 THINGS:
+        # -------------------------------
+        model_path = Path('./models')
+        model_ids =  ['era5_ext-base','era5_ext-c1e2'] #["era5_ext-base"]#['era5_baseline-v2', 'era5_baseline-c1e1', 'era5_baseline-c1e2','era5_baseline-c1e3']
+        #plot_and_save_era5(f"logs/era5_baseline-v2-1/version_0/metrics.csv", Path(f"reports/figures/{model_id}"))
 
-    plot_cv_val_metrics(
-        model_ids=model_ids,
-        fold_num=5,
-        log_path="logs",
-        out_dir=f"reports/figures/era5_baseline_comparisons",
-        smooth_window=20,
-    )
-    # ---------------------------------------------------
-    exit()
+        plot_cv_val_metrics(
+            model_ids=model_ids,
+            fold_num=5,
+            log_path="logs",
+            out_dir=f"reports/figures/era5_baseline_comparisons",
+            smooth_window=20,
+        )
+        # ---------------------------------------------------
 
-    model_path = Path('./models')
-    model_id = 'exp1-aaaaa'
-    model_id_2 = 'exp1-aaaab'
-    # cfg = OmegaConf.load(model_path / (model_id) / "config.yaml")
-    # diffusion_model = DiffusionModel(cfg)
-    # diffusion_model.load_model(model_path / model_id / f"best-val_loss-weights.pt")
-    # plot_darcy_samples(diffusion_model, model_id, Path('./reports/figures') / model_id)
+    if plot_darcy:
+        model_path = Path('./models')
+        model_id = 'exp1-aaaaa'
+        model_id_2 = 'exp1-aaaab'
+        # cfg = OmegaConf.load(model_path / (model_id) / "config.yaml")
+        # diffusion_model = DiffusionModel(cfg)
+        # diffusion_model.load_model(model_path / model_id / f"best-val_loss-weights.pt")
+        # plot_darcy_samples(diffusion_model, model_id, Path('./reports/figures') / model_id)
 
-    plot_darcy_val_metrics(
-        model_id_1=model_id,
-        model_id_2=model_id_2,
-        fold_num=5,
-        log_path="logs",
-        out_dir=f"reports/figures/{model_id}",
-        smooth_window=20,
-    )
-    breakpoint()
+        plot_darcy_val_metrics(
+            model_id_1=model_id,
+            model_id_2=model_id_2,
+            fold_num=5,
+            log_path="logs",
+            out_dir=f"reports/figures/{model_id}",
+            smooth_window=20,
+        )
+        breakpoint()
 
-    cfg = OmegaConf.load(model_path / model_id / "config.yaml")
-    dataset = DatasetRegistry.create(cfg.dataset)
-    diffusion_model = DiffusionModel(cfg)
-    diffusion_model.load_model(model_path / model_id / f"best-val_loss-weights.pt")
-    diffusion_model = diffusion_model.to('cuda' if torch.cuda.is_available() else 'cpu')
-    
-    plot_data_samples = False
+        cfg = OmegaConf.load(model_path / model_id / "config.yaml")
+        dataset = DatasetRegistry.create(cfg.dataset)
+        diffusion_model = DiffusionModel(cfg)
+        diffusion_model.load_model(model_path / model_id / f"best-val_loss-weights.pt")
+        diffusion_model = diffusion_model.to('cuda' if torch.cuda.is_available() else 'cpu')
+        
     if plot_data_samples:
         # Load the dataset configuration
         config_path = Path("configs/dataset/era5.yaml")
@@ -672,8 +677,3 @@ if __name__ == "__main__":
         # Visualize time series
         for variable in cfg.atmospheric_features:
             visualize_time_series(era5_dataset, variable=variable, level=500, coords=(12.568, 55.676))
-
-    sample = True
-    if sample:
-        visualize_era5_sample()
-
