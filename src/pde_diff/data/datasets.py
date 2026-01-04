@@ -174,6 +174,9 @@ class ERA5Dataset(Dataset):
 
     def _normalize(self, data, means, stds):
         return (data - means[:, None, None]) / (stds[:, None, None] + 0.0001)
+    
+    def _unnormalize(self, data, means, stds):
+        return data * (stds[:, None, None] + 0.0001) + means[:, None, None]
 
     def _sin_cos_emb(self, x):
         return np.sin(2 * np.pi * x), np.cos(2 * np.pi * x)

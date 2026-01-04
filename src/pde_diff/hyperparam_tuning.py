@@ -6,6 +6,7 @@ import gc
 import os
 import optuna
 from optuna.integration import PyTorchLightningPruningCallback
+from multiprocessing import Pool
 import hydra
 import torch
 
@@ -34,9 +35,16 @@ class ObjectiveFunction(object):
         model = DiffusionModel(self.cfg)
 
         dataset_train, dataset_val = split_dataset(self.cfg, dataset)
+        
+        # To not get out-of-memory error, accumulate the gradients for batch sizes above 32
+        batch_size = self.cfg.experiment.hyperparameters.batch_size
+        accumulate_no_batches = 1
+        if batch_size>32:
+            accumulate_no_batches=self.cfg.experiment.hyperparameters.batch_size//32
+            batch_size = 32
 
-        train_dataloader = DataLoader(dataset_train, batch_size=self.cfg.experiment.hyperparameters.batch_size, shuffle=True, num_workers=4,persistent_workers=True)
-        val_dataloader = DataLoader(dataset_val, batch_size=self.cfg.experiment.hyperparameters.batch_size, shuffle=False, num_workers=4,persistent_workers=True)
+        train_dataloader = DataLoader(dataset_train, batch_size=batch_size, shuffle=True, num_workers=4,persistent_workers=True)
+        val_dataloader = DataLoader(dataset_val, batch_size=batch_size, shuffle=False, num_workers=4,persistent_workers=True)
 
         acc = "gpu" if torch.cuda.is_available() else "cpu"
 
@@ -55,7 +63,8 @@ class ObjectiveFunction(object):
             enable_checkpointing=False,
             logger=logger,
             log_every_n_steps=self.cfg.experiment.hyperparameters.log_every_n_steps,
-            callbacks=[early_stop_callback, PyTorchLightningPruningCallback(trial, monitor="val_loss")]
+            callbacks=[early_stop_callback, PyTorchLightningPruningCallback(trial, monitor="val_loss")],
+            accumulate_grad_batches=accumulate_no_batches
         )
 
         trainer.fit(model, train_dataloader, val_dataloader)
@@ -96,17 +105,12 @@ def run_optimization(cfg: DictConfig):
                                 pruner=pruner,
                                 storage=storage_url,
                                 load_if_exists=True)
-    study.optimize(ObjectiveFunction(cfg), n_trials=hp_cfg.n_trials, show_progress_bar=True)
-
-    print("Best trial:")
-    trial = study.best_trial
-    print(f"  Value: {trial.value}")
-    print("  Params: ")
-    for key, value in trial.params.items():
-        print(f"    {key}: {value}")
-
-    return study
+    study.optimize(ObjectiveFunction(cfg), n_trials=hp_cfg.n_trials, show_progress_bar=True,)
 
 
 if __name__ == "__main__":
     run_optimization()
+
+#if __name__ == "__main__":
+#    with Pool(processes=4) as pool:
+#        pool.map(run_optimization)

@@ -28,8 +28,15 @@ def train(cfg: DictConfig):
 
     dataset_train, dataset_val = split_dataset(cfg, dataset)
 
-    train_dataloader = DataLoader(dataset_train, batch_size=hp_config.batch_size, shuffle=True, num_workers=4,persistent_workers=True)
-    val_dataloader = DataLoader(dataset_val, batch_size=hp_config.batch_size, shuffle=False, num_workers=4,persistent_workers=True)
+    # To not get out-of-memory error, accumulate the gradients for batch sizes above 32
+    batch_size = hp_config.batch_size
+    accumulate_no_batches = 1
+    if batch_size>32:
+        accumulate_no_batches=hp_config.batch_size//32
+        batch_size = 32
+
+    train_dataloader = DataLoader(dataset_train, batch_size=batch_size, shuffle=True, num_workers=4,persistent_workers=True)
+    val_dataloader = DataLoader(dataset_val, batch_size=batch_size, shuffle=False, num_workers=4,persistent_workers=True)
     
     wandb_name = f"{cfg.experiment.name}-{cfg.id}"
 
@@ -40,6 +47,7 @@ def train(cfg: DictConfig):
     else:
         os.makedirs("logs", exist_ok=True)
         logger = pl.pytorch.loggers.CSVLogger("logs", name=wandb_name)
+    
 
     trainer = pl.Trainer(
         accelerator=acc,
@@ -47,7 +55,8 @@ def train(cfg: DictConfig):
         enable_checkpointing=False,
         logger=logger,
         log_every_n_steps=hp_config.log_every_n_steps,
-        callbacks=[SaveBestModel()]
+        callbacks=[SaveBestModel()],
+        accumulate_grad_batches=accumulate_no_batches
     )
 
     print(f"Starting training of model {cfg.id}")

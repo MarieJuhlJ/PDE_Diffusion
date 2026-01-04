@@ -103,11 +103,15 @@ class DiffusionModel(pl.LightningModule):
             noisy_images = torch.cat([conditionals, noisy_images], dim=1)
 
         model_out = self.model(noisy_images, steps)
+        x0_hat = model_out
+        if self.conditional:
+            x0_hat = torch.cat([conditionals[:, 19:34], model_out], dim=1) #hardcoded for now (TODO)
+
         variance = self.scheduler.posterior_variance[steps]
         self.loss_fn.c_data = self.scheduler.p2_loss_weight[steps]
         loss = self.loss_fn(model_out=model_out, target=target, x0_hat=model_out, var=variance)
         self.log("test_loss", loss, prog_bar=True, batch_size=model_out.size(0))
-        self.additional_validation_metrics(model_out, target, steps)
+        self.additional_validation_metrics(model_out, target,x0_hat, steps)
 
     def additional_validation_metrics(self, model_out, target, x0_hat, steps, validation=True):
         if validation:

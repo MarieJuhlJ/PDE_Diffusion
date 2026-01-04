@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import yaml
 
@@ -35,6 +36,14 @@ VAR_NAMES = {
     "pv": "q",
 }
 
+VAR_UNITS = {
+    "u": r"$m s^{-1}$",
+    "v": r"$m s^{-1}$",
+    "t": r"$K$",
+    "z": r"$m^2 s^{-2}$",
+    "pv": r"$m^2 K Kg^{-1} s^{-1}$",
+}
+
 colors = ["brown", "white", "teal"]  # Transition from blue to white to red
 custom_cmap = LinearSegmentedColormap.from_list("custom_cmap", colors)
 colors = ["teal", "white", "brown"]  # Transition from blue to white to red
@@ -47,6 +56,15 @@ COLOR_BARS = {
     "z": custom_cmap2,
     "pv": custom_cmap,
 }
+
+# Custom colour palette (different from default Matplotlib cycle)
+diffusion_colors = ("#2A9D8F","#9AD1C5")   # teal and light teal
+pidm_colors      = ("#C7392F","#E76F51","#B8349B") # warm coral   # light orange
+train_loss_pidm_colors = ( "#2781CA", "#0660AA",  "#033B7A" )
+val_loss_pidm_colors   = ("#C7392F","#E76F51","#B8349B")
+train_loss_diff_colors = ("#E9AF11", "#E0BC58")
+val_loss_diff_colors   = ("#2A9D8F", "#9AD1C5") 
+
 
 def plot_darcy_samples(model, model_id, out_dir=Path('./reports/figures')):
     from matplotlib.colors import LogNorm
@@ -176,11 +194,12 @@ def get_time_series(dataset, variable, level=500, coords=(12.568, 55.676)):
     lon, lat = coords
     lon_idx = np.argmin(np.abs(dataset.grid_lon - lon))
     lat_idx = np.argmin(np.abs(dataset.grid_lat - lat))
+    print(dataset.data[variable].shape)
     time_series = dataset.data[variable][:, level_idx, lon_idx, lat_idx]
     return time_series
 
 
-def visualize_era5_sample(data_sample, variable, level=500, big_data_sample=None, sample_idx=None, dir=Path("./reports/figures/samples")):
+def visualize_era5_sample(data_sample, variable, level=500, big_data_sample=None, sample_idx=None, dir=Path("./reports/figures/samples"), color_bar_limit=None):
     """
     Visualize a sample from the ERA5 dataset.
 
@@ -190,12 +209,15 @@ def visualize_era5_sample(data_sample, variable, level=500, big_data_sample=None
         level (int): Pressure level to focus on (default: 500hPa).
         big_data_sample (np.ndarray, optional): The entire dataset for context.
         sample_idx (int, optional): Index of the sample (for title purposes).
+        color_bar_limit (tuple, optional): Tuple of (vmin, vmax) for color bar limits.
     """
     dir = Path(dir)
     dir.mkdir(parents=True, exist_ok=True)
 
     # Plot the data
     fig, ax = plt.subplots(figsize=(6,3))
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
 
     if big_data_sample is not None:
         vmin = min(big_data_sample.min(), data_sample.min())
@@ -217,19 +239,19 @@ def visualize_era5_sample(data_sample, variable, level=500, big_data_sample=None
             facecolor='none'                           # transparent fill
         )
         ax.add_patch(rect)
-        fig.colorbar(ax.images[-1], ax=ax, shrink=0.4)
+        fig.colorbar(ax.images[-1], ax=ax, label=f"{VAR_UNITS.get(variable, variable)}")
     else:
-        ax.imshow(data_sample.T, cmap=COLOR_BARS.get(variable, 'coolwarm'), extent=EXTENT_SUBSET, origin='lower')
-        fig.colorbar(ax.images[-1], ax=ax, shrink=0.4, location="bottom")
+        ax.imshow(data_sample.T, cmap=COLOR_BARS.get(variable, 'coolwarm'), extent=EXTENT_SUBSET, origin='lower', vmin=color_bar_limit[0] if color_bar_limit else None, vmax=color_bar_limit[1] if color_bar_limit else None)
+        fig.colorbar(ax.images[-1], ax=ax, shrink=0.4, location="bottom") #, label=f"{VAR_UNITS.get(variable, variable)}")
+        ax.set_xlim(EXTENT_SUBSET[0], EXTENT_SUBSET[1])
+        ax.set_ylim(EXTENT_SUBSET[3], EXTENT_SUBSET[2])
 
     ax.set_title(f"{VAR_NAMES.get(variable, variable)} at {level} hPa")
-    ax.set_xlabel("Longitude")
-    ax.set_ylabel("Latitude")
     plt.tight_layout()
     plot_path = f"era5_sample{sample_idx if sample_idx is not None else ''}_{variable}_{level}hPa"
     plot_path += "_full" if big_data_sample is not None else ""
     plot_path += PLOT_TYPE
-    plot_path = dir / plot_path
+    plot_path = os.path.join(dir, plot_path)
     plt.savefig(plot_path, bbox_inches='tight', pad_inches=0.05)
     print(f"Saved visualization to {plot_path}")
 
@@ -415,67 +437,164 @@ def plot_darcy_val_metrics(
 
     def load_model_stats(model_id: str, smooth_window: int):
         residuals, mses, train_losses, val_losses = [], [], [], []
+def moving_average_2d(arr, window):
+    """Apply moving average along the time axis for a 2D array [fold, time]."""
+    if window <= 1:
+        return arr
+    kernel = np.ones(window) / window
+    return np.apply_along_axis(
+        lambda m: np.convolve(m, kernel, mode="valid"), axis=1, arr=arr
+    )
 
-        for fold in range(1, fold_num + 1):
-            current_model_id = f"{model_id}-{fold}"
-            csv_path = Path(log_path) / current_model_id / "version_0" / "metrics.csv"
-            if not csv_path.exists():
-                raise FileNotFoundError(f"Missing metrics.csv: {csv_path}")
+def load_model_stats(model_id, smooth_window=1, fold_num=0, log_path="logs"):
+    residual_errors = []
+    weighted_mse_errors = []
+    train_loss = []
+    val_loss = []
+    steps = None
 
-            df = (
-                pd.read_csv(csv_path)
-                .apply(pd.to_numeric, errors="ignore")
-            )
+    for fold in range(1, fold_num + 1):
+        current_model_id = f"{model_id}-{fold}"
+        csv_path = Path(log_path) / current_model_id / "version_0" / "metrics.csv"
 
-            # Prefer sorting by step if present
-            if "step" in df.columns:
-                df = df.dropna(subset=["step"]).sort_values("step")
-
-            residuals.append(_read_metric_series(df, "val_darcy_residual"))
-            mses.append(_read_metric_series(df, "val_mse_(weighted)"))
-            train_losses.append(_read_metric_series(df, "train_loss"))
-            val_losses.append(_read_metric_series(df, "val_loss"))
-
-        # Stack + trim so folds align in time
-        residuals = _stack_and_trim(residuals)
-        mses = _stack_and_trim(mses)
-        train_losses = _stack_and_trim(train_losses)
-        val_losses = _stack_and_trim(val_losses)
-
-        # Smooth (valid mode => shorter length)
-        residuals = moving_average_2d(residuals, smooth_window)
-        mses = moving_average_2d(mses, smooth_window)
-        train_losses = moving_average_2d(train_losses, smooth_window)
-        val_losses = moving_average_2d(val_losses, smooth_window)
-
-        res_mean, res_low, res_high = _mean_ci(residuals)
-        mse_mean, mse_low, mse_high = _mean_ci(mses)
-        tr_mean, tr_low, tr_high = _mean_ci(train_losses)
-        va_mean, va_low, va_high = _mean_ci(val_losses)
-
-        epochs = min(
-            len(res_mean) if len(res_mean) else np.inf,
-            len(mse_mean) if len(mse_mean) else np.inf,
-            len(tr_mean) if len(tr_mean) else np.inf,
-            len(va_mean) if len(va_mean) else np.inf,
+        df = (
+            pd.read_csv(csv_path)
+            .apply(pd.to_numeric)
+            .dropna(subset=["step"])
+            .sort_values("step")
         )
-        epochs = int(epochs) if epochs != np.inf else 0
 
-        return {
-            "epochs": epochs,
-            "res_mean": res_mean, "res_low": res_low, "res_high": res_high,
-            "mse_mean": mse_mean, "mse_low": mse_low, "mse_high": mse_high,
-            "train_loss_mean": tr_mean, "train_loss_low": tr_low, "train_loss_high": tr_high,
-            "val_loss_mean": va_mean, "val_loss_low": va_low, "val_loss_high": va_high,
-        }
+        if steps is None:
+            steps = df["step"].values
 
-    # ---------------- Plotting functions (reusable) ----------------
-    def plot_residual(ax, x, s1, s2, epochs):
-        ax.plot(x, s1["res_mean"][:epochs], label="Diffusion mean", linewidth=2.2, color=diffusion_color)
-        ax.fill_between(x, s1["res_low"][:epochs], s1["res_high"][:epochs], alpha=0.3, color=diffusion_ci, label="Diffusion 95% CI")
+        residual_errors.append((df["val_era5_geo_wind_residual(norm)"].dropna()
+                                +df["val_era5_planetary_residual(norm)"].dropna()
+                                +df["val_era5_qgpv_residual(norm)"].dropna()).values)
+        weighted_mse_errors.append(df["val_mse_(weighted)"].dropna().values)
+        train_loss.append(df["train_loss"].dropna().values)
+        val_loss.append(df["val_loss"].dropna().values)
 
-        ax.plot(x, s2["res_mean"][:epochs], label="PIDM mean", linewidth=2.2, color=pidm_color)
-        ax.fill_between(x, s2["res_low"][:epochs], s2["res_high"][:epochs], alpha=0.3, color=pidm_ci, label="PIDM 95% CI")
+    # limit to the shortest length
+    min_length = min(len(arr) for arr in residual_errors)
+    residual_errors = np.array([arr[:min_length] for arr in residual_errors])      # shape: [fold, time]
+    weighted_mse_errors = np.array([arr[:min_length] for arr in weighted_mse_errors])
+    train_loss = np.array([arr[:min_length] for arr in train_loss])
+    val_loss = np.array([arr[:min_length] for arr in val_loss])
+
+    # --- Smooth over time (epochs) ---
+    residual_errors = moving_average_2d(residual_errors, smooth_window)
+    weighted_mse_errors = moving_average_2d(weighted_mse_errors, smooth_window)
+    train_loss = moving_average_2d(train_loss, smooth_window)
+    val_loss = moving_average_2d(val_loss, smooth_window)
+
+    n = residual_errors.shape[0]
+
+    res_mean = residual_errors.mean(axis=0)
+    res_std = residual_errors.std(axis=0)
+    res_low = res_mean - 1.96 * res_std / np.sqrt(n)
+    res_high = res_mean + 1.96 * res_std / np.sqrt(n)
+
+    mse_mean = weighted_mse_errors.mean(axis=0)
+    mse_std = weighted_mse_errors.std(axis=0)
+    mse_low = mse_mean - 1.96 * mse_std / np.sqrt(n)
+    mse_high = mse_mean + 1.96 * mse_std / np.sqrt(n)
+
+    train_loss_mean = train_loss.mean(axis=0)
+    train_loss_std = train_loss.std(axis=0)
+    val_loss_mean = val_loss.mean(axis=0)
+    val_loss_std = val_loss.std(axis=0)
+
+    train_loss_low = train_loss_mean - 1.96 * train_loss_std / np.sqrt(n)
+    train_loss_high = train_loss_mean + 1.96 * train_loss_std / np.sqrt(n)
+    val_loss_low = val_loss_mean - 1.96 * val_loss_std / np.sqrt(n)
+    val_loss_high = val_loss_mean + 1.96 * val_loss_std / np.sqrt(n)
+
+
+    # Number of *smoothed* points
+    epochs = res_mean.shape[0] # TODO: This is actually epochs which makes the plots wrong, it is number of smoothed points
+
+    return {
+        "epochs": epochs,
+        "res_mean": res_mean,
+        "res_low": res_low,
+        "res_high": res_high,
+        "mse_mean": mse_mean,
+        "mse_low": mse_low,
+        "mse_high": mse_high,
+        "train_loss_mean": train_loss_mean,
+        "train_loss_low": train_loss_low,
+        "train_loss_high": train_loss_high,
+        "val_loss_mean": val_loss_mean,
+        "val_loss_low": val_loss_low,
+        "val_loss_high": val_loss_high,
+    }
+
+def fill_in_ax(ax, x, stats, error_type, epochs, color, name):
+        # Diffusion
+    ax.plot(x, stats[f"{error_type}_mean"][:epochs],
+            label=f"{name} mean",
+            linewidth=2.2,
+            color=color)
+    ax.fill_between(
+        x,
+        stats[f"{error_type}_low"][:epochs],
+        stats[f"{error_type}_high"][:epochs],
+        alpha=0.3,
+        color=color,
+        #label=f"{name} 95% CI",
+    )
+    return ax
+
+def plot_cv_val_metrics(model_ids, fold_num, log_path, out_dir, smooth_window=10):
+    """
+    Function to plot cross-validated validation metrics for one or multiple models.
+    Args:
+        model_ids (list): List of model IDs to plot.
+        fold_num (int): Number of cross-validation folds.
+        log_path (str): Path to the logs directory.
+        out_dir (str): Output directory to save the plots.
+        smooth_window (int): Window size for smoothing the metrics.
+    """
+    # --- Global styling tweaks ---
+    plt.rcParams.update({
+        "figure.figsize": (13, 5),
+        "axes.grid": True,
+        "grid.alpha": 0.3,
+        "axes.titlesize": 13,
+        "axes.labelsize": 12,
+        "xtick.labelsize": 10,
+        "ytick.labelsize": 10,
+        "legend.fontsize": 10,
+    })
+
+    model_id_to_name={
+        "c1e1": r"c=1e-1",
+        "c1e2": r"c=1e-2",
+        "c1e3": r"c=1e-3",
+    }
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    stats1 = load_model_stats(model_ids[0], smooth_window, fold_num=fold_num, log_path=log_path)
+    if len(model_ids) > 1:
+        stats2 = [load_model_stats(model_ids[i], smooth_window, fold_num=fold_num, log_path=log_path) for i in range(1, len(model_ids))]
+
+    epochs = min([stats["epochs"] for stats in [stats1]+stats2]) if len(model_ids) > 1 else stats1["epochs"]
+
+    x = np.arange(epochs)
+
+    fig, axes = plt.subplots(1, 3, sharex=True)
+
+    # ---------------- Residual ----------------
+    ax = axes[0]
+
+    # fill in the loss curves for diffusion and pidm
+    ax = fill_in_ax(ax, x, stats1, "res", epochs, diffusion_colors[0], "Diffusion")
+    if len(model_ids) > 1:
+        for i, model_id_2 in enumerate(model_ids[1:]):
+            suffix = model_id_to_name.get(model_id_2.split('-')[-1], "")
+            ax = fill_in_ax(ax, x, stats2[i], "res", epochs, pidm_colors[i], f"PIDM-{suffix}")
 
         ax.set_xlabel(f"Epoch (smoothed, window={smooth_window})")
         ax.set_ylabel(r"$\mathcal{R}_{\text{MAE}}(\mathbf{x_0}) \sim p_\theta (\mathbf{x_0})$")
@@ -483,12 +602,15 @@ def plot_darcy_val_metrics(
         ax.set_yscale("log")
         ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
 
-    def plot_mse(ax, x, s1, s2, epochs):
-        ax.plot(x, s1["mse_mean"][:epochs], label="Diffusion mean", linewidth=2.2, color=diffusion_color)
-        ax.fill_between(x, s1["mse_low"][:epochs], s1["mse_high"][:epochs], alpha=0.3, color=diffusion_ci, label="Diffusion 95% CI")
+    # ---------------- MSE ----------------
+    ax = axes[1]
 
-        ax.plot(x, s2["mse_mean"][:epochs], label="PIDM mean", linewidth=2.2, color=pidm_color)
-        ax.fill_between(x, s2["mse_low"][:epochs], s2["mse_high"][:epochs], alpha=0.3, color=pidm_ci, label="PIDM 95% CI")
+    # fill in the loss curves for diffusion and pidm
+    ax = fill_in_ax(ax, x, stats1,"mse", epochs, diffusion_colors[0], "Diffusion")
+    if len(model_ids) > 1:
+        for i, model_id_2 in enumerate(model_ids[1:]):
+            suffix = model_id_to_name.get(model_id_2.split('-')[-1], "")
+            ax = fill_in_ax(ax, x, stats2[i],"mse", epochs, pidm_colors[i], f"PIDM-{suffix}")
 
         ax.set_xlabel(f"Epoch (smoothed, window={smooth_window})")
         ax.set_ylabel(r"$\mathbb{E}_{t, \mathbf{x_0}}[\lambda_t \|\mathbf{x_0} - \hat{\mathbf{x}}_0\|^2]$")
@@ -496,75 +618,36 @@ def plot_darcy_val_metrics(
         ax.set_yscale("log")
         ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
 
-    def plot_train_val_loss(ax, x, s1, s2, epochs):
-        # Diffusion train/val
-        ax.plot(x, s1["train_loss_mean"][:epochs], label="Train loss mean (Diffusion)", linewidth=2.2, color=train_loss_diff_color)
-        ax.fill_between(x, s1["train_loss_low"][:epochs], s1["train_loss_high"][:epochs], alpha=0.3, color=train_loss_diff_ci, label="Train loss 95% CI (Diffusion)")
+    ax = axes[2]
 
-        ax.plot(x, s1["val_loss_mean"][:epochs], label="Val loss mean (Diffusion)", linewidth=2.2, color=val_loss_diff_color)
-        ax.fill_between(x, s1["val_loss_low"][:epochs], s1["val_loss_high"][:epochs], alpha=0.3, color=val_loss_diff_ci, label="Val loss 95% CI (Diffusion)")
+    # Train loss
+    ax = fill_in_ax(ax, x, stats1,"train_loss", epochs, train_loss_diff_colors[0], "Diffusion Train loss")
+    ax = fill_in_ax(ax, x, stats1,"val_loss", epochs, val_loss_diff_colors[0], "Diffusion Val loss")
+    if len(model_ids) > 1:
+        for i, model_id_2 in enumerate(model_ids[1:]):
+            suffix = model_id_to_name.get(model_id_2.split('-')[-1], "")
+            ax = fill_in_ax(ax, x, stats2[i],"train_loss", epochs, train_loss_pidm_colors[i], f"PIDM-{suffix} Train loss")
+            ax = fill_in_ax(ax, x, stats2[i],"val_loss", epochs, val_loss_pidm_colors[i], f"PIDM-{suffix} Val loss")
 
-        # PIDM train/val
-        ax.plot(x, s2["train_loss_mean"][:epochs], label="Train loss mean (PIDM)", linewidth=2.2, color=train_loss_pidm_color)
-        ax.fill_between(x, s2["train_loss_low"][:epochs], s2["train_loss_high"][:epochs], alpha=0.3, color=train_loss_pidm_ci, label="Train loss 95% CI (PIDM)")
+    ax.set_xlabel(f"Epoch (smoothed, window={smooth_window})")
+    ax.set_ylabel(r"$\mathbb{E}_{t, \mathbf{x_0}}[\lambda_t \|\mathbf{x_0} - \hat{\mathbf{x}}_0\|^2] + \frac{1}{2 \tilde{\Sigma}} || \mathcal{R}(\mathbf{x}_0^*)(\mathbf{x}_t,t)||^2$")
+    ax.set_title("Train vs Validation loss")
+    ax.set_yscale("log")
+    ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
 
-        ax.plot(x, s2["val_loss_mean"][:epochs], label="Val loss mean (PIDM)", linewidth=2.2, color=val_loss_pidm_color)
-        ax.fill_between(x, s2["val_loss_low"][:epochs], s2["val_loss_high"][:epochs], alpha=0.3, color=val_loss_pidm_ci, label="Val loss 95% CI (PIDM)")
-
-        ax.set_xlabel(f"Epoch (smoothed, window={smooth_window})")
-        ax.set_ylabel(r"$\mathbb{E}_{t, \mathbf{x_0}}[\lambda_t \|\mathbf{x_0} - \hat{\mathbf{x}}_0\|^2] + \frac{1}{2 \tilde{\Sigma}} || \mathcal{R}(\mathbf{x}_0^*)(\mathbf{x}_t,t)||^2$")
-        ax.set_title("Train vs Validation loss")
-        ax.set_yscale("log")
-        ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
-
-    def save_single(plot_fn, filename, figsize=(6.5, 5)):
-        fig, ax = plt.subplots(figsize=figsize)
-        plot_fn(ax, x, stats1, stats2, epochs)
-        fig.tight_layout()
-        fig.savefig(out_dir / filename, dpi=dpi, bbox_inches="tight")
-        plt.close(fig)
-
-    # ---------------- Main ----------------
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    stats1 = load_model_stats(model_id_1, smooth_window)
-    stats2 = load_model_stats(model_id_2, smooth_window)
-
-    epochs = min(stats1["epochs"], stats2["epochs"])
-    if epochs <= 0:
-        raise ValueError("No epochs to plot after trimming/smoothing. Check your CSVs and smooth_window.")
-
-    x = np.arange(epochs)
-
-    # Combined figure
-    fig, axes = plt.subplots(1, 3, sharex=True, figsize=(13, 5))
-    plot_residual(axes[0], x, stats1, stats2, epochs)
-    plot_mse(axes[1], x, stats1, stats2, epochs)
-    plot_train_val_loss(axes[2], x, stats1, stats2, epochs)
-
+    # Improve spacing
     fig.tight_layout(rect=[0, 0.0, 1, 0.95])
-    combined_path = out_dir / f"{model_id_1}_vs_{model_id_2}_darcy_val_metrics.png"
-    fig.savefig(combined_path, dpi=dpi, bbox_inches="tight")
+
+    save_path = out_dir / f"{"_vs_".join(model_ids)}_val_metrics.png" if len(model_ids) > 1 else out_dir / f"{model_ids[0]}_val_metrics.png"
+    fig.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
-
-    # Individual subplots
-    save_single(plot_residual,     f"{model_id_1}_vs_{model_id_2}_darcy_residual.png")
-    save_single(plot_mse,          f"{model_id_1}_vs_{model_id_2}_weighted_mse.png")
-    save_single(plot_train_val_loss, f"{model_id_1}_vs_{model_id_2}_train_vs_val_loss.png")
-
-    print(f"Saved combined plot to: {combined_path}")
-    print(f"Saved individual plots to: {out_dir}")
+    print(f"Saved validation metrics plot to {save_path}")
 
 def plot_and_save_era5(csv_path, out_dir, loss_title="Loss", residual_title="Residuals & MSE", log_scale=False):
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    df = (
-        pd.read_csv(csv_path)
-        .apply(pd.to_numeric, errors="ignore")
-        .dropna(subset=["step"])
-        .sort_values("step")
-    )
+    df = pd.read_csv(csv_path).apply(pd.to_numeric).dropna(subset=["step"])
+    df = df.sort_values("step")
 
     # ---- Loss plot ----
     train_df = df.dropna(subset=["train_loss"])
@@ -572,16 +655,16 @@ def plot_and_save_era5(csv_path, out_dir, loss_title="Loss", residual_title="Res
 
     plt.plot(train_df.epoch, train_df.train_loss, label="train_loss")
     plt.plot(val_df.epoch, val_df.val_loss, label="val_loss")
+    plt.legend(); plt.grid(); plt.title("Loss")
+    plt.savefig(out_dir / "loss.png"); plt.clf()
 
-    if log_scale:
-        plt.yscale("log")
-
-    plt.legend()
-    plt.grid(True, which="both")
-    plt.title(loss_title)
-    plt.savefig(out_dir / "loss.png", bbox_inches="tight")
-    plt.clf()
-    print(f"saved fig to {out_dir}/loss.png")
+    res_df_geo = df.dropna(subset=["val_era5_geo_wind_residual(norm)"])
+    res_df_planetary = df.dropna(subset=["val_era5_planetary_residual(norm)"])
+    res_df_qgpv = df.dropna(subset=["val_era5_qgpv_residual(norm)"])
+    mse_df = df.dropna(subset=["val_mse_(weighted)"])
+    data_geo_scaled = res_df_geo["val_era5_geo_wind_residual(norm)"] / res_df_geo["val_era5_geo_wind_residual(norm)"][0]
+    data_planetary_scaled = res_df_planetary["val_era5_planetary_residual(norm)"] / res_df_planetary["val_era5_planetary_residual(norm)"][0]
+    data_qgpv_scaled = res_df_qgpv["val_era5_qgpv_residual(norm)"] / res_df_qgpv["val_era5_qgpv_residual(norm)"][0]
 
     # ---- Residual + MSE plot ----
     res_df_geo = df.dropna(subset=["val_era5_geo_wind_residual(norm)"])
@@ -847,104 +930,86 @@ def era5_residuals_plot(model, conditional, model_id, normalize=True):
 
 if __name__ == "__main__":
     from pde_diff.utils import DatasetRegistry, LossRegistry
+    plot_darcy = False
+    plot_data_samples = True
+    plot_era5_training = False
 
-    model_path = Path('./models')
-    # model_id = 'exp1-aaaaa'
-    # model_id_2 = 'exp1-aaaab'
-    # cfg = OmegaConf.load(model_path / (model_id) / "config.yaml")
-    # diffusion_model = DiffusionModel(cfg)
-    # diffusion_model.load_model(model_path / model_id / f"best-val_loss-weights.pt")
-    # plot_darcy_samples(diffusion_model, model_id, Path('./reports/figures') / model_id)
+    if plot_era5_training:
+        # PLOT ERA 5 THINGS:
+        # -------------------------------
+        model_path = Path('./models')
+        model_ids =  ['era5_ext-base','era5_ext-c1e2'] #["era5_ext-base"]#['era5_baseline-v2', 'era5_baseline-c1e1', 'era5_baseline-c1e2','era5_baseline-c1e3']
+        #plot_and_save_era5(f"logs/era5_baseline-v2-1/version_0/metrics.csv", Path(f"reports/figures/{model_id}"))
 
-    # plot_darcy_val_metrics(
-    #     model_id_1=model_id,
-    #     model_id_2=model_id_2,
-    #     fold_num=5,
-    #     log_path="logs",
-    #     out_dir=f"reports/figures/{model_id}",
-    #     smooth_window=20,
-    # )
-    # latex = darcy_models_summary_latex_table(
-    # model_ids=[model_id, model_id_2],
-    # fold_num=5,
-    # log_path="logs",
-    # smooth_window=10,
-    # )
-    # print(latex)
+        plot_cv_val_metrics(
+            model_ids=model_ids,
+            fold_num=5,
+            log_path="logs",
+            out_dir=f"reports/figures/era5_baseline_comparisons",
+            smooth_window=20,
+        )
+        # ---------------------------------------------------
 
-    model_id = 'exp1-jnham'
-    model_id_2 = 'exp1-xosel'
-    cfg = OmegaConf.load(model_path / model_id / "config.yaml")
-    dataset = DatasetRegistry.create(cfg.dataset)
-    diffusion_model = DiffusionModel(cfg)
-    diffusion_model.load_model(model_path / model_id / f"best-val_loss-weights.pt")
-    diffusion_model = diffusion_model.to('cuda' if torch.cuda.is_available() else 'cpu')
-    csv_path = Path('./logs') / model_id / 'version_0/metrics.csv'
-    out_dir = Path('./reports') / 'figures' / model_id
-    plot_and_save_era5(csv_path, out_dir, log_scale=True)
-    
-    #2nd model
-    cfg_2 = OmegaConf.load(model_path / model_id_2 / "config.yaml")
-    diffusion_model_2 = DiffusionModel(cfg_2)
-    diffusion_model_2.load_model(model_path / model_id_2 / f"best-val_loss-weights.pt")
-    diffusion_model_2 = diffusion_model_2.to('cuda' if torch.cuda.is_available() else 'cpu')
-    csv_path = Path('./logs') / model_id_2 / 'version_0/metrics.csv'
-    out_dir = Path('./reports') / 'figures' / model_id_2
-    plot_and_save_era5(csv_path, out_dir, log_scale=True)
-    breakpoint()
+    if plot_darcy:
+        model_path = Path('./models')
+        model_id = 'exp1-aaaaa'
+        model_id_2 = 'exp1-aaaab'
+        # cfg = OmegaConf.load(model_path / (model_id) / "config.yaml")
+        # diffusion_model = DiffusionModel(cfg)
+        # diffusion_model.load_model(model_path / model_id / f"best-val_loss-weights.pt")
+        # plot_darcy_samples(diffusion_model, model_id, Path('./reports/figures') / model_id)
 
-    #load loss
-    loss_fn = LossRegistry.create(cfg.loss)
-    loss_fn.set_mean_and_std(diffusion_model.means, diffusion_model.stds, diffusion_model.diff_means, diffusion_model.diff_stds)
+        plot_darcy_val_metrics(
+            model_id_1=model_id,
+            model_id_2=model_id_2,
+            fold_num=5,
+            log_path="logs",
+            out_dir=f"reports/figures/{model_id}",
+            smooth_window=20,
+        )
+        breakpoint()
 
-    # Load the dataset configuration
-    config_path = Path("configs/dataset/era5.yaml")
-    cfg = OmegaConf.load(config_path)
-    # cfg.normalize = True
-    # Initialize the ERA5 dataset
-    era5_dataset = ERA5Dataset(cfg)
+        cfg = OmegaConf.load(model_path / model_id / "config.yaml")
+        dataset = DatasetRegistry.create(cfg.dataset)
+        diffusion_model = DiffusionModel(cfg)
+        diffusion_model.load_model(model_path / model_id / f"best-val_loss-weights.pt")
+        diffusion_model = diffusion_model.to('cuda' if torch.cuda.is_available() else 'cpu')
+        
+    if plot_data_samples:
+        # Load the dataset configuration
+        config_path = Path("configs/dataset/era5.yaml")
+        cfg = OmegaConf.load(config_path)
+        cfg.normalize = False
 
-    cfg.lat_range = None
-    era5_dataset_full = ERA5Dataset(cfg)
-    era5_dataset_full.normalization_on = False
+        # Initialize the ERA5 dataset
+        era5_dataset = ERA5Dataset(cfg)
+        cfg.lat_range = None
 
-    # Visualize all variables of a sample from the dataset
-    sample_idx = 2  # Index of the sample to visualize
-    variable = "t"  # Variable to visualize
-    level = 500  # Pressure level in hPa
-    conditionals = torch.from_numpy(era5_dataset[10][sample_idx - 2][None, :]).to("cuda")
-    model_sample = diffusion_model.sample_loop(conditionals = conditionals)
-    prev, current = loss_fn.get_original_states(x0_previous=conditionals[:, 19:34], x0_change_pred=model_sample)
-    
-    print("Diffusion Model Residuals:")
-    print(f"Model ID: {model_id}")
-    era5_residuals_plot(diffusion_model, conditionals, model_id, normalize=True)
-    print(f"Model ID: {model_id_2}")
-    era5_residuals_plot(diffusion_model_2, conditionals, model_id_2, normalize=True)
-    
-    dir = Path("./reports/figures") / model_id
-    for idx, variable in enumerate(cfg.atmospheric_features):
-        data_sample = current[0,1,idx].cpu()
-        data_sample_full = get_data_sample(era5_dataset_full, sample_idx, variable, level)
-        visualize_era5_sample(data_sample, variable, level, big_data_sample=data_sample_full, dir=dir)
+        era5_dataset_full = ERA5Dataset(cfg)
 
-    breakpoint()
-    """
-    # Visualize the noise schedule
-    config_path = Path("configs/scheduler/ddpm.yaml")
-    cfg_scheduler = OmegaConf.load(config_path)
-    from pde_diff.utils import SchedulerRegistry
-    scheduler = SchedulerRegistry.create(cfg_scheduler)
+        # Visualize all variables of a sample from the dataset
+        sample_idx = 0  # Index of the sample to visualize
+        variable = "t"  # Variable to visualize
+        level = 500  # Pressure level in hPa
+        for variable in cfg.atmospheric_features:
+            data_sample = get_data_sample(era5_dataset, sample_idx, variable, level)
+            data_sample_full = get_data_sample(era5_dataset_full, sample_idx, variable, level)
+            visualize_era5_sample(data_sample, variable, level, big_data_sample=data_sample_full)
 
-    variable = "t"
-    data_sample = get_data_sample(era5_dataset, sample_idx, variable, level)
+        # Visualize the noise schedule
+        config_path = Path("configs/scheduler/ddpm.yaml")
+        cfg_scheduler = OmegaConf.load(config_path)
+        from pde_diff.utils import SchedulerRegistry
+        scheduler = SchedulerRegistry.create(cfg_scheduler)
 
-    #visualize_noise_schedule(scheduler, data_sample, variable, level, sample_idx)
+        variable = "t"
+        data_sample = get_data_sample(era5_dataset, sample_idx, variable, level)
 
-    # Visualize a full sample from the dataset without the subset overlay
-    visualize_era5_sample_full(data_sample_full, variable, level)"""
+        #visualize_noise_schedule(scheduler, data_sample, variable, level, sample_idx)
 
-    # Visualize time series
-    for variable in cfg.atmospheric_features:
-        visualize_time_series(era5_dataset, variable=variable, level=500, coords=(12.568, 55.676))
+        # Visualize a full sample from the dataset without the subset overlay
+        visualize_era5_sample_full(data_sample_full, variable, level)
 
+        # Visualize time series
+        for variable in cfg.atmospheric_features:
+            visualize_time_series(era5_dataset, variable=variable, level=500, coords=(12.568, 55.676))
