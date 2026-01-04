@@ -1,4 +1,5 @@
 import torch
+from torch.utils.data._utils.collate import default_collate
 import numpy as np
 import lightning as pl
 from diffusers import UNet2DModel, UNet2DConditionModel
@@ -148,6 +149,33 @@ class DiffusionModel(pl.LightningModule):
                     x0_preds = self.sample_loop(batch_size=16)
                     darcy_res = self.loss_fn.compute_residual(x0_preds).mean().abs()
                 self.log("val_darcy_residual", darcy_res, prog_bar=True, on_epoch=True, sync_dist=True)
+            if metric_name == 'era5_vorticity':
+                with torch.no_grad():
+                    val_conditionals = self._uniform_val_batch(n=16)[0].to(self.device)
+                    x0_preds = self.sample_loop(batch_size=16, conditionals=val_conditionals)
+                    x0_prev = val_conditionals[:, 19:34]
+                    residual_planetary = self.loss_fn.compute_residual_planetary_vorticity(x0_prev, x0_preds).abs().mean()
+                    residual_geo_wind = self.loss_fn.compute_residual_geostrophic_wind(x0_prev, x0_preds).abs().mean()
+                    residual_qgpv = self.loss_fn.compute_residual_qgpv(x0_prev, x0_preds).abs().mean()
+                self.log("val_era5_sampled_planetary_residual(norm)", residual_planetary, prog_bar=True, on_epoch=True, sync_dist=True)
+                self.log("val_era5_sampled_geo_wind_residual(norm)", residual_geo_wind, prog_bar=True, on_epoch=True, sync_dist=True)
+                self.log("val_era5_sampled_qgpv_residual(norm)", residual_qgpv, prog_bar=True, on_epoch=True, sync_dist=True)
+
+    def _uniform_val_batch(self, n=16):
+        vdl = self.trainer.val_dataloaders
+        vdl = vdl[0] if isinstance(vdl, (list, tuple)) else vdl
+
+        ds = vdl.dataset
+        N = len(ds)
+
+        # 16 evenly spaced indices in [0, N-1]
+        idx = torch.linspace(0, N - 1, steps=n).long().tolist()
+
+        # fetch items and collate into a batch like the dataloader would
+        items = [ds[i] for i in idx]
+        batch = default_collate(items)
+
+        return batch
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.hp_config.lr, weight_decay=self.hp_config.weight_decay)

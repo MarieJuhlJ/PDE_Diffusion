@@ -24,6 +24,7 @@ class PDE_loss(nn.Module):
                 self.c_residuals = [self.cfg.c_residual for _ in residual_fns]
         else:
             self.c_residuals = [0.0 for _ in residual_fns]
+        self.num_active_residuals = max(1, sum(c != 0.0 for c in self.c_residuals))
 
     def residual_loss(self, x0_hat, var, residual_fn):
         if self.cfg.name == 'vorticity':
@@ -40,16 +41,18 @@ class PDE_loss(nn.Module):
     def forward(self, model_out, target, **kwargs):
         x0_hat = kwargs.get('x0_hat', None)
         var = kwargs.get('var', None)
+        total = 0.0
+        for fn, w in zip(self.residual_fns, self.c_residuals):
+            if w > 0.0:
+                r = self.residual_loss(x0_hat, var, fn)
+                total += r * w
+            total /= self.num_active_residuals
 
         if self.c_data is None:
             total = self.mse(model_out, target).mean()
         else:
             total = (self.mse(model_out, target) * self.c_data[:, None, None, None]).mean()
 
-        for fn, w in zip(self.residual_fns, self.c_residuals):
-            if w > 0.0:
-                r = self.residual_loss(x0_hat, var, fn)
-                total += r * w
         return total
 
 @LossRegistry.register("mse")
