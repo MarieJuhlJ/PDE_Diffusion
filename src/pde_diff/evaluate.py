@@ -5,7 +5,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 import os
-import panda as pd
+import pandas as pd
 
 import lightning as pl
 from sklearn.model_selection import KFold
