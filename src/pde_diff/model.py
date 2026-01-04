@@ -122,9 +122,9 @@ class DiffusionModel(pl.LightningModule):
                     num_channels = x0_hat.shape[1]
                     x0_previous = x0_hat[:, :num_channels//2, :, :]
                     x0_change_pred = x0_hat[:, num_channels//2:, :, :]
-                    residual_planetary = self.loss_fn.compute_residual_planetary_vorticity(x0_previous, x0_change_pred).pow(2).mean()
-                    residual_geo_wind = self.loss_fn.compute_residual_geostrophic_wind(x0_previous, x0_change_pred).pow(2).mean()
-                    residual_qgpv = self.loss_fn.compute_residual_qgpv(x0_previous, x0_change_pred).pow(2).mean()
+                    residual_planetary = self.loss_fn.compute_residual_planetary_vorticity(x0_previous, x0_change_pred).abs().mean()
+                    residual_geo_wind = self.loss_fn.compute_residual_geostrophic_wind(x0_previous, x0_change_pred).abs().mean()
+                    residual_qgpv = self.loss_fn.compute_residual_qgpv(x0_previous, x0_change_pred).abs().mean()
                     self.log("val_era5_planetary_residual(norm)", residual_planetary, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
                     self.log("val_era5_geo_wind_residual(norm)", residual_geo_wind, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
                     self.log("val_era5_qgpv_residual(norm)", residual_qgpv, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))

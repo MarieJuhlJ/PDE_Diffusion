@@ -1,6 +1,6 @@
 #!/bin/sh 
-#BSUB -q gpua100
-#BSUB -J era5_pde_1em1
+#BSUB -q gpuv100
+#BSUB -J era5_1em2_pv
 #BSUB -n 4
 #BSUB -gpu "num=1:mode=exclusive_process"
 #BSUB -W 24:00
@@ -24,4 +24,4 @@ conda activate pde_diff
 #weight: 3.978931581387639e-06
 #batch_size: 16
 
-python src/pde_diff/train.py dataset=era5 loss.name=vorticity model.name=unet3d_conditional experiment.hyperparameters.lr=0.0012420100674942623 experiment.hyperparameters.batch_size=16 experiment.hyperparameters.weight_decay=3.978931581387639e-06 loss.c_residual=1e-1
+python src/pde_diff/train.py dataset=era5 loss.name=vorticity model.name=unet3d_conditional experiment.hyperparameters.lr=0.0012420100674942623 experiment.hyperparameters.batch_size=16 experiment.hyperparameters.weight_decay=3.978931581387639e-06 loss.c_residual=[1e-2,0.0,0.0]
