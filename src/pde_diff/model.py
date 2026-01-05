@@ -110,7 +110,7 @@ class DiffusionModel(pl.LightningModule):
 
         variance = self.scheduler.posterior_variance[steps]
         self.loss_fn.c_data = self.scheduler.p2_loss_weight[steps]
-        loss = self.loss_fn(model_out=model_out, target=target, x0_hat=model_out, var=variance)
+        loss = self.loss_fn(model_out=model_out, target=target, x0_hat=x0_hat, var=variance)
         self.log("test_loss", loss, prog_bar=True, batch_size=model_out.size(0))
         self.additional_validation_metrics(model_out, target,x0_hat, steps)
 
@@ -193,7 +193,8 @@ class DiffusionModel(pl.LightningModule):
             x0_pred = self.model(samples, t_batch)
             if self.conditional:
                 samples = samples[:,-self.data_dims.output_dims:,:,:]
-            mean = self.scheduler.posterior_mean_coef1[t_batch][:, None, None, None] * x0_pred + self.scheduler.posterior_mean_coef2[t_batch][:, None, None, None] * samples
+            mean = self.scheduler.posterior_mean_coef1[t_batch][:, None, None, None] * x0_pred
+            mean.add_(self.scheduler.posterior_mean_coef2[t_batch][:, None, None, None] * samples)
             z = torch.randn_like(samples) if t > 0 else 0
             samples = mean + self.scheduler.sigmas[t] * z
         return samples
@@ -201,9 +202,12 @@ class DiffusionModel(pl.LightningModule):
     def sample_loop(self, batch_size=1, conditionals=None):
         samples = torch.randn((batch_size,int(self.data_dims.output_dims), int(self.data_dims.x), int(self.data_dims.y)), device=self.device)
         for t in reversed(range(self.scheduler.config.num_train_timesteps)):
-            if self.conditional and conditionals is not None:
-                samples = torch.cat([conditionals, samples], dim=1)
-            samples = self.forward(samples, t)
+            if self.conditional:
+                model_in = torch.cat((conditionals, samples), dim=1)
+            else:
+                model_in = samples
+
+        samples = self.forward(model_in, t)
         return samples
 
     def forecast(self, initial_condition, steps):
@@ -325,7 +329,7 @@ class UNet3DWrapperConditional(torch.nn.Module):
         conditionals = x[:, :cond_channels, :, :]
         inputs = x[:, cond_channels:, :, :]
         return self.unet(x = inputs, time = t, cond = conditionals)
-        
+
 
 @ModelRegistry.register("unet2d")
 class UNet2DWrapper(torch.nn.Module):
