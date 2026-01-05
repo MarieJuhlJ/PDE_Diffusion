@@ -933,6 +933,7 @@ if __name__ == "__main__":
     plot_darcy = False
     plot_data_samples = True
     plot_era5_training = False
+    plot_era5_residual = False
 
     if plot_era5_training:
         # PLOT ERA 5 THINGS:
@@ -949,6 +950,10 @@ if __name__ == "__main__":
             smooth_window=20,
         )
         # ---------------------------------------------------
+
+    if plot_era5_residual:
+        model_path = Path('./models')
+        model_id = 'exp1-aaaaa'
 
     if plot_darcy:
         model_path = Path('./models')
