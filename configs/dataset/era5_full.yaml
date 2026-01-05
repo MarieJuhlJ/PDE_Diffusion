@@ -1,5 +1,5 @@
 name: era5
-path: ./data/era5/zarr/
+path: ./data/era5/zarr_full/
 use_double: False
 time_series: True
 validation_metrics: ['mse', 'era5_vorticity']

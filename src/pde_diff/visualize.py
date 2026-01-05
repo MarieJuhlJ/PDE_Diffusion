@@ -37,11 +37,11 @@ VAR_NAMES = {
 }
 
 VAR_UNITS = {
-    "u": r"$m s^{-1}$",
-    "v": r"$m s^{-1}$",
+    "u": r"$m \cdot s^{-1}$",
+    "v": r"$m \cdot s^{-1}$",
     "t": r"$K$",
-    "z": r"$m^2 s^{-2}$",
-    "pv": r"$m^2 K Kg^{-1} s^{-1}$",
+    "z": r"$m^2 \cdot s^{-2}$",
+    "pv": r"$m^2 \cdot K \cdot Kg^{-1} \cdot s^{-1}$",
 }
 
 colors = ["brown", "white", "teal"]  # Transition from blue to white to red
@@ -63,7 +63,7 @@ pidm_colors      = ("#C7392F","#E76F51","#B8349B") # warm coral   # light orange
 train_loss_pidm_colors = ( "#2781CA", "#0660AA",  "#033B7A" )
 val_loss_pidm_colors   = ("#C7392F","#E76F51","#B8349B")
 train_loss_diff_colors = ("#E9AF11", "#E0BC58")
-val_loss_diff_colors   = ("#2A9D8F", "#9AD1C5") 
+val_loss_diff_colors   = ("#2A9D8F", "#9AD1C5")
 
 
 def plot_darcy_samples(model, model_id, out_dir=Path('./reports/figures')):
@@ -979,7 +979,7 @@ if __name__ == "__main__":
         diffusion_model = DiffusionModel(cfg)
         diffusion_model.load_model(model_path / model_id / f"best-val_loss-weights.pt")
         diffusion_model = diffusion_model.to('cuda' if torch.cuda.is_available() else 'cpu')
-        
+
     if plot_data_samples:
         # Load the dataset configuration
         config_path = Path("configs/dataset/era5.yaml")
@@ -988,8 +988,10 @@ if __name__ == "__main__":
 
         # Initialize the ERA5 dataset
         era5_dataset = ERA5Dataset(cfg)
+        config_path = Path("configs/dataset/era5_full.yaml")
+        cfg = OmegaConf.load(config_path)
+        cfg.normalize = False
         cfg.lat_range = None
-
         era5_dataset_full = ERA5Dataset(cfg)
 
         # Visualize all variables of a sample from the dataset
