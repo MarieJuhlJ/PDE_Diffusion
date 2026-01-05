@@ -1,7 +1,8 @@
 import torch
 from pde_diff.loss import VorticityLoss
 from pde_diff.data.datasets import ERA5Dataset
-from pde_diff.utils import init_means_and_stds_era5
+from pde_diff.utils import init_means_and_stds_era5, LossRegistry
+from tqdm import tqdm
 from omegaconf import OmegaConf
 import json
 from pathlib import Path
@@ -18,31 +19,27 @@ def to_tensor(x, device):
         t = t.float()
     return t.to(device, non_blocking=True)
 
-
 def update_stats(x, stats):
     x = x.detach()
     stats["count"] += x.numel()
     stats["sum"] += x.sum().item()
     stats["sumsq"] += (x ** 2).sum().item()
 
-
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
     cfg = OmegaConf.load("./configs/dataset/era5.yaml")
-    loss_cfg = OmegaConf.create({
-        "name": "VorticityLoss",
-        "c_residual": [1.0, 1.0, 1.0],
-        # if your loss reads a device entry, this helps; if not, it’s harmless
-        "device": str(device),
-    })
+    cfg_loss = OmegaConf.create(
+        {
+            "name": "vorticity",
+            "c_residual": 1.0,
+        }
+    )
 
-    loss_fn = VorticityLoss(cfg=loss_cfg)
+    loss_fn = LossRegistry.create(cfg_loss)
     dataset = ERA5Dataset(cfg=cfg)
-    means, stds, diff_means, diff_stds = init_means_and_stds_era5(cfg.atmospheric_features, cfg.single_features, cfg.static_features)
-    loss_fn.set_mean_and_std(means, stds, diff_means, diff_stds)
-    
+    loss_fn.set_mean_and_std(dataset.means, dataset.stds, dataset.diff_means, dataset.diff_stds)
 
     stats = {
         "geostrophic_wind": {"count": 0, "sum": 0.0, "sumsq": 0.0},
@@ -51,7 +48,7 @@ if __name__ == "__main__":
     }
 
     with torch.no_grad():
-        for data in dataset:
+        for data in tqdm(dataset, desc="Processing dataset"):
             prev_np, curr_np = data[0][None, 19:34], data[1][None, :]
 
             prev = to_tensor(prev_np, device)

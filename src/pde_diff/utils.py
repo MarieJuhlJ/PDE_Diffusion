@@ -196,7 +196,7 @@ class GradientHelper:
     def d_in_dy(self, input):
         b, lev, lon, lat = input.shape
 
-        inp = F.pad(input, (1, 1, 0, 0), mode='circular')
+        inp = F.pad(input, (1, 1, 0, 0), mode='reflect')
 
         kernel = torch.tensor([-1, 0, 1], dtype=input.dtype, device=input.device) / 2.0
         kernel = kernel.view(1, 1, 1, 3)
@@ -209,10 +209,28 @@ class GradientHelper:
         dy = dy.view(b, lev, lon, lat)
         return dy / self.grid_distances['dy']
 
+    def d2_in_dx2(self, input):
+        b, lev, lon, lat = input.shape
+        inp = F.pad(input, (0, 0, 1, 1), mode="circular")
+
+        k = torch.tensor([1., -2., 1.], dtype=input.dtype, device=input.device).view(1, 1, 3, 1)
+        out = F.conv2d(inp.view(b * lev, 1, lon + 2, lat), k, padding=0).view(b, lev, lon, lat)
+
+        dx = self.grid_distances["dx"]
+        return out / (dx * dx)
+
+    def d2_in_dy2(self, input):
+        b, lev, lon, lat = input.shape
+        inp = F.pad(input, (1, 1, 0, 0), mode="reflect")
+
+        k = torch.tensor([1., -2., 1.], dtype=input.dtype, device=input.device).view(1, 1, 1, 3)
+        out = F.conv2d(inp.view(b * lev, 1, lon, lat + 2), k, padding=0).view(b, lev, lon, lat)
+
+        dy = self.grid_distances["dy"]
+        return out / (dy * dy)
+
     def laplacian_horizontal(self, input):
-        d2_dx2 = self.d_in_dx(self.d_in_dx(input)) * self.grid_distances["dx"]
-        d2_dy2 = self.d_in_dy(self.d_in_dy(input)) * self.grid_distances["dy"]
-        return d2_dx2 + d2_dy2
+        return self.d2_in_dx2(input) + self.d2_in_dy2(input)
 
     def gradient_horizontal(self, input):
         dx = self.d_in_dx(input)
