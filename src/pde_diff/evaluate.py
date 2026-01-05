@@ -15,6 +15,8 @@ from pde_diff.model import DiffusionModel
 from pde_diff.data.utils import split_dataset
 import pde_diff.loss
 from pde_diff.visualize import visualize_era5_sample
+from pde_diff.visualize_eval import plot_forecast_loss_vs_steps
+
 
 
 @hydra.main(version_base=None, config_name="evaluate.yaml", config_path="../../configs")
@@ -47,30 +49,16 @@ def evaluate(cfg: DictConfig):
 
     if cfg.dataset.name in ["era5"]:
         print("Evaluating forecasting performance...")
-        forecasting_losses = evaluate_forecasting(model, dataset_test, steps=cfg.steps, losses=["mse", "vorticity"],dir=os.path.join(dir, name))
+        forecasting_losses = evaluate_forecasting(model, dataset_test, steps=cfg.steps, losses=["mse"],dir=os.path.join(dir, name))
         # save losses to csv
-        for loss_name in forecasting_losses.keys():
+        for loss_name, loss_dict in forecasting_losses.items():
+            df = pd.DataFrame(loss_dict)
+            df.index = [f"Forecast{i+1}" for i in range(len(df))]
+            df.index.name = "forecast_step"
+            plot_forecast_loss_vs_steps(df, dir=os.path.join(dir, name), loss_name=loss_name)
             path_csv = os.path.join(dir, name, f"forecasting_losses_{loss_name}.csv")
-            with open(path_csv, "w") as f:
-                f.write("forecast_step," + ",".join(forecasting_losses[loss_name].keys()) + "\n")
-                for forecast_no in range(len(forecasting_losses[loss_name][str(1)])):
-                    f.write(f"Forecast{forecast_no+1}")
-                    for step in forecasting_losses[loss_name].keys():
-                        f.write(f",{forecasting_losses[loss_name][step][forecast_no]}")
-                    f.write("\n")
+            df.to_csv(path_csv)
             print(f"Forecasting losses saved to CSV {path_csv}.")
-
-        #save mean losses
-        path_csv = os.path.join(dir, name, f"forecasting_losses_mean.csv")
-        with open(path_csv, "w") as f:
-            f.write("forecast_step," + ",".join(forecasting_losses[loss_name].keys()) + "\n")
-            for step in range(1, cfg.steps+1):
-                f.write(f"{step}")
-                for loss_name in forecasting_losses.keys():
-                    mean_loss = sum(forecasting_losses[loss_name][str(step)]) / len(forecasting_losses[loss_name][str(step)])
-                    f.write(f",{mean_loss}")
-                f.write("\n")
-        print(f"Mean forecasting losses saved to CSV {path_csv}.")
 
         for loss_name, loss_values in forecasting_losses.items():
             for step, values in loss_values.items():
@@ -128,7 +116,7 @@ def evaluate_forecasting(model: DiffusionModel, dataset_test: Dataset, steps: in
                                  persistent_workers=True)
     max_steps = len(dataloader_test)
 
-    loss_fns = {loss: LossRegistry.create(OmegaConf.create({"name":loss, "c_residual": 1e-1})) for loss in losses} #TODO: extend to loss configs
+    loss_fns = {loss: LossRegistry.create(OmegaConf.create({"name":loss})) for loss in losses} #TODO: extend to other losses
 
     loss = {loss: {str(i+1): [] for i in range(steps)} for loss in losses}
 
