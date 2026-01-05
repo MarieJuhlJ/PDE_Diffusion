@@ -150,6 +150,8 @@ class DiffusionModel(pl.LightningModule):
                     darcy_res = self.loss_fn.compute_residual(x0_preds).mean().abs()
                 self.log("val_darcy_residual", darcy_res, prog_bar=True, on_epoch=True, sync_dist=True)
             if metric_name == 'era5_vorticity':
+                if self.current_epoch % 5 != 0:
+                    return
                 with torch.no_grad():
                     val_conditionals = self._uniform_val_batch(n=16)[0].to(self.device)
                     x0_preds = self.sample_loop(batch_size=16, conditionals=val_conditionals)
