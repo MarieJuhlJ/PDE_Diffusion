@@ -52,13 +52,16 @@ class DiffusionModel(pl.LightningModule):
         noisy_images = self.scheduler.add_noise(state, noise, steps)
 
         if self.conditional:
-            noisy_images = torch.cat([conditionals, noisy_images], dim=1)
+            model_in = torch.cat((conditionals, noisy_images), dim=1)
+        else:
+            model_in = noisy_images
 
-        model_out = self.model(noisy_images, steps)
-        x0_hat = model_out
+        model_out = self.model(model_in, steps)
 
         if self.conditional:
             x0_hat = torch.cat([conditionals[:, 19:34], model_out], dim=1) #hardcoded for now (TODO)
+        else:
+            x0_hat = model_out
 
         variance = self.scheduler.posterior_variance[steps]
         self.loss_fn.c_data = self.scheduler.p2_loss_weight[steps] #https://arxiv.org/pdf/2303.09556.pdf
