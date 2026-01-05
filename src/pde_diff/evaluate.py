@@ -20,14 +20,12 @@ from pde_diff.visualize import visualize_era5_sample
 @hydra.main(version_base=None, config_name="evaluate.yaml", config_path="../../configs")
 def evaluate(cfg: DictConfig):
     # load model config from cfg.model.path
-    best_fold = find_best_fold(cfg.model.path)
-    print(f"Best fold: {best_fold} with val")
-    model_path = cfg.model.path + f"-{best_fold[0]}"
-    model_cfg = OmegaConf.load(model_path + "/config.yaml")
+    best_fold= find_best_fold(cfg.model.path)
+    print(f"Best fold: {best_fold[0]} with val loss {best_fold[1]}")
+    model_cfg = OmegaConf.load(cfg.model.path.split("/")[0] + "/" + best_fold[0] + "/config.yaml")
     cfg = OmegaConf.merge(model_cfg, cfg)
 
     pl.seed_everything(cfg.seed)
-    print(cfg)
     model = DiffusionModel(cfg)
     model.load_state_dict(torch.load(cfg.model.path + "/best-val_loss-weights.pt"))
     cfg.dataset.path= "./data/era5/zarr_test/"  #TODO: not hardcoded
@@ -49,7 +47,7 @@ def evaluate(cfg: DictConfig):
 
     if cfg.dataset.name in ["era5"]:
         print("Evaluating forecasting performance...")
-        forecasting_losses = evaluate_forecasting(model, dataset_test, steps=cfg.steps, losses=["mse"],dir=os.path.join(dir, name))
+        forecasting_losses = evaluate_forecasting(model, dataset_test, steps=cfg.steps, losses=["mse", "vorticity"],dir=os.path.join(dir, name))
         # save losses to csv
         for loss_name in forecasting_losses.keys():
             path_csv = os.path.join(dir, name, f"forecasting_losses_{loss_name}.csv")
@@ -80,6 +78,10 @@ def evaluate(cfg: DictConfig):
                 print(f"Step {step}: {loss_name} = {mean_loss}")
 
 def find_best_fold(model_path, fold_no=5, log_path="logs"):
+    if os.path.exists(os.path.join(log_path, f"{model_path.split('/')[-1]}")):
+        print("No folds found, using single model.")
+        return (model_path.split('/')[-1], None)
+
     best_model = (None, float("inf"))
     for fold in range(1, fold_no+1):
         current_model_id = f"{model_path.split("/")[-1]}-{fold}"
@@ -126,7 +128,8 @@ def evaluate_forecasting(model: DiffusionModel, dataset_test: Dataset, steps: in
                                  persistent_workers=True)
     max_steps = len(dataloader_test)
 
-    loss_fns = {loss: LossRegistry.create(OmegaConf.create({"name":loss})) for loss in losses}
+    loss_fns = {loss: LossRegistry.create(OmegaConf.create({"name":loss, "c_residual": 1e-1})) for loss in losses} #TODO: extend to loss configs
+
     loss = {loss: {str(i+1): [] for i in range(steps)} for loss in losses}
 
     forecasts = []
@@ -148,11 +151,11 @@ def evaluate_forecasting(model: DiffusionModel, dataset_test: Dataset, steps: in
                 os.makedirs(dir_sample, exist_ok=True)
 
                 target_state = dataset_test._unnormalize(conditionals[:,19:34,:,:], dataset_test.means, dataset_test.stds)
-                + dataset_test._unnormalize(target.detach().cpu(), dataset_test.diff_means, dataset_test.diff_stds) 
-                
+                + dataset_test._unnormalize(target.detach().cpu(), dataset_test.diff_means, dataset_test.diff_stds)
+
                 un_norm_forecasted_states = dataset_test._unnormalize(forecasted_states.detach().cpu(), dataset_test.means, dataset_test.stds)
 
-                save_samples(un_norm_forecasted_states, dir=dir_sample,target_state=target_state) 
+                save_samples(un_norm_forecasted_states, dir=dir_sample,target_state=target_state)
 
         for loss_name, loss_fn in loss_fns.items():
             for n in range(len(forecasts)):
