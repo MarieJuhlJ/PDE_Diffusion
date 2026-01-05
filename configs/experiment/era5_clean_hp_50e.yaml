@@ -1,4 +1,4 @@
-name: era5_cleanhp_30e
+name: era5_cleanhp_50e
 
 hyperparameters:
   batch_size: 16

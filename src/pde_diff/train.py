@@ -4,6 +4,7 @@ import torch
 
 import lightning as pl
 from torch.utils.data import DataLoader
+import torch.multiprocessing as mp
 from omegaconf import DictConfig, OmegaConf
 
 from pde_diff.utils import DatasetRegistry, LossRegistry, unique_id
@@ -14,6 +15,7 @@ from pde_diff.data.utils import split_dataset
 
 @hydra.main(version_base=None, config_name="config.yaml", config_path="../../configs")
 def train(cfg: DictConfig):
+    mp.set_start_method("spawn", force=True)
     hp_config = cfg.experiment.hyperparameters
     if cfg.get("k_folds") is not None:
         assert cfg.id is not None, "If k_folds is used, an id must be provided."
@@ -35,8 +37,8 @@ def train(cfg: DictConfig):
         accumulate_no_batches=hp_config.batch_size//32
         batch_size = 32
 
-    train_dataloader = DataLoader(dataset_train, batch_size=batch_size, shuffle=True, num_workers=4,persistent_workers=True)
-    val_dataloader = DataLoader(dataset_val, batch_size=batch_size, shuffle=False, num_workers=4,persistent_workers=True)
+    train_dataloader = DataLoader(dataset_train, batch_size=batch_size, shuffle=True, num_workers=4,persistent_workers=True, worker_init_fn=worker_init_fn)
+    val_dataloader = DataLoader(dataset_val, batch_size=batch_size, shuffle=False, num_workers=4,persistent_workers=True, worker_init_fn=worker_init_fn)
     
     wandb_name = f"{cfg.experiment.name}-{cfg.id}"
 
@@ -62,6 +64,12 @@ def train(cfg: DictConfig):
     print(f"Starting training of model {cfg.id}")
     trainer.fit(model, train_dataloader, val_dataloader)
     print(f"Training completed of model {cfg.id}")
+
+def worker_init_fn(worker_id):
+    info = torch.utils.data.get_worker_info()
+    ds = info.dataset
+    if hasattr(ds, "_open"):
+        ds.ds = None
 
 if __name__ == "__main__":
     train()
