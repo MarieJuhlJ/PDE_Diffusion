@@ -446,7 +446,7 @@ def moving_average_2d(arr, window):
         lambda m: np.convolve(m, kernel, mode="valid"), axis=1, arr=arr
     )
 
-def load_model_stats(model_id, smooth_window=1, fold_num=0, log_path="logs"):
+def load_model_stats(model_id, smooth_window=1, fold_num=0, log_path="logs", data_type="era5"):
     residual_errors = []
     weighted_mse_errors = []
     train_loss = []
@@ -454,8 +454,10 @@ def load_model_stats(model_id, smooth_window=1, fold_num=0, log_path="logs"):
     steps = None
 
     for fold in range(1, fold_num + 1):
-        current_model_id = f"{model_id}-{fold}"
-        csv_path = Path(log_path) / current_model_id / "version_0" / "metrics.csv"
+        current_model_id = f"{model_id}-{fold}" if not fold_num==1 else model_id
+        # get latest metrics.csv:
+        versions = [f.path for f in os.scandir(os.path.join(log_path, current_model_id)) if f.is_dir()]
+        csv_path = Path(versions[-1]) / "metrics.csv"
 
         df = (
             pd.read_csv(csv_path)
@@ -463,13 +465,16 @@ def load_model_stats(model_id, smooth_window=1, fold_num=0, log_path="logs"):
             .dropna(subset=["step"])
             .sort_values("step")
         )
+        print(f"Loaded metrics from {csv_path} with {len(df)} entries.")
 
         if steps is None:
             steps = df["step"].values
-
-        residual_errors.append((df["val_era5_geo_wind_residual(norm)"].dropna()
-                                +df["val_era5_planetary_residual(norm)"].dropna()
-                                +df["val_era5_qgpv_residual(norm)"].dropna()).values)
+        if data_type == "darcy":
+            residual_errors.append(df["val_darcy_residual"].dropna().values)
+        elif data_type == "era5":
+            residual_errors.append((df["val_era5_sampled_planetary_residual(norm)"].dropna()
+                                    +df["val_era5_sampled_geo_wind_residual(norm)"].dropna()
+                                    +df["val_era5_sampled_qgpv_residual(norm)"].dropna()).values/3.0)
         weighted_mse_errors.append(df["val_mse_(weighted)"].dropna().values)
         train_loss.append(df["train_loss"].dropna().values)
         val_loss.append(df["val_loss"].dropna().values)
@@ -482,10 +487,11 @@ def load_model_stats(model_id, smooth_window=1, fold_num=0, log_path="logs"):
     val_loss = np.array([arr[:min_length] for arr in val_loss])
 
     # --- Smooth over time (epochs) ---
-    residual_errors = moving_average_2d(residual_errors, smooth_window)
-    weighted_mse_errors = moving_average_2d(weighted_mse_errors, smooth_window)
-    train_loss = moving_average_2d(train_loss, smooth_window)
-    val_loss = moving_average_2d(val_loss, smooth_window)
+    if smooth_window > 1:
+        residual_errors = moving_average_2d(residual_errors, smooth_window)
+        weighted_mse_errors = moving_average_2d(weighted_mse_errors, smooth_window)
+        train_loss = moving_average_2d(train_loss, smooth_window)
+        val_loss = moving_average_2d(val_loss, smooth_window)
 
     n = residual_errors.shape[0]
 
@@ -511,7 +517,8 @@ def load_model_stats(model_id, smooth_window=1, fold_num=0, log_path="logs"):
 
 
     # Number of *smoothed* points
-    epochs = res_mean.shape[0] # TODO: This is actually epochs which makes the plots wrong, it is number of smoothed points
+    epochs = res_mean.shape[0] if len(res_mean.shape) > 1 else len(res_mean)
+    # TODO: This is actually epochs which makes the plots wrong, it is number of smoothed points
 
     return {
         "epochs": epochs,
@@ -545,7 +552,7 @@ def fill_in_ax(ax, x, stats, error_type, epochs, color, name):
     )
     return ax
 
-def plot_cv_val_metrics(model_ids, fold_num, log_path, out_dir, smooth_window=10):
+def plot_cv_val_metrics(model_ids, fold_num, log_path, out_dir, smooth_window=10, data_type="era5"):
     """
     Function to plot cross-validated validation metrics for one or multiple models.
     Args:
@@ -576,9 +583,9 @@ def plot_cv_val_metrics(model_ids, fold_num, log_path, out_dir, smooth_window=10
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    stats1 = load_model_stats(model_ids[0], smooth_window, fold_num=fold_num, log_path=log_path)
+    stats1 = load_model_stats(model_ids[0], smooth_window, fold_num=fold_num, log_path=log_path, data_type=data_type)
     if len(model_ids) > 1:
-        stats2 = [load_model_stats(model_ids[i], smooth_window, fold_num=fold_num, log_path=log_path) for i in range(1, len(model_ids))]
+        stats2 = [load_model_stats(model_ids[i], smooth_window, fold_num=fold_num, log_path=log_path, data_type=data_type) for i in range(1, len(model_ids))]
 
     epochs = min([stats["epochs"] for stats in [stats1]+stats2]) if len(model_ids) > 1 else stats1["epochs"]
 
@@ -596,11 +603,11 @@ def plot_cv_val_metrics(model_ids, fold_num, log_path, out_dir, smooth_window=10
             suffix = model_id_to_name.get(model_id_2.split('-')[-1], "")
             ax = fill_in_ax(ax, x, stats2[i], "res", epochs, pidm_colors[i], f"PIDM-{suffix}")
 
-        ax.set_xlabel(f"Epoch (smoothed, window={smooth_window})")
-        ax.set_ylabel(r"$\mathcal{R}_{\text{MAE}}(\mathbf{x_0}) \sim p_\theta (\mathbf{x_0})$")
-        ax.set_title("Validation Darcy Residual")
-        ax.set_yscale("log")
-        ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
+    ax.set_xlabel(f"Epoch{f" (smoothed, window={smooth_window})" if smooth_window>1 else ""}")
+    ax.set_ylabel(r"$\mathcal{R}_{\text{MAE}}(\mathbf{x_0}) \sim p_\theta (\mathbf{x_0})$")
+    ax.set_title("Validation Sample Residual")
+    ax.set_yscale("log")
+    ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
 
     # ---------------- MSE ----------------
     ax = axes[1]
@@ -612,11 +619,11 @@ def plot_cv_val_metrics(model_ids, fold_num, log_path, out_dir, smooth_window=10
             suffix = model_id_to_name.get(model_id_2.split('-')[-1], "")
             ax = fill_in_ax(ax, x, stats2[i],"mse", epochs, pidm_colors[i], f"PIDM-{suffix}")
 
-        ax.set_xlabel(f"Epoch (smoothed, window={smooth_window})")
-        ax.set_ylabel(r"$\mathbb{E}_{t, \mathbf{x_0}}[\lambda_t \|\mathbf{x_0} - \hat{\mathbf{x}}_0\|^2]$")
-        ax.set_title("Validation Weighted MSE")
-        ax.set_yscale("log")
-        ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
+    ax.set_xlabel(f"Epoch{f" (smoothed, window={smooth_window})" if smooth_window>1 else ""}")
+    ax.set_ylabel(r"$\mathbb{E}_{t, \mathbf{x_0}}[\lambda_t \|\mathbf{x_0} - \hat{\mathbf{x}}_0\|^2]$")
+    ax.set_title("Validation Weighted MSE")
+    ax.set_yscale("log")
+    ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
 
     ax = axes[2]
 
@@ -629,7 +636,7 @@ def plot_cv_val_metrics(model_ids, fold_num, log_path, out_dir, smooth_window=10
             ax = fill_in_ax(ax, x, stats2[i],"train_loss", epochs, train_loss_pidm_colors[i], f"PIDM-{suffix} Train loss")
             ax = fill_in_ax(ax, x, stats2[i],"val_loss", epochs, val_loss_pidm_colors[i], f"PIDM-{suffix} Val loss")
 
-    ax.set_xlabel(f"Epoch (smoothed, window={smooth_window})")
+    ax.set_xlabel(f"Epoch{f" (smoothed, window={smooth_window})" if smooth_window>1 else ""}")
     ax.set_ylabel(r"$\mathbb{E}_{t, \mathbf{x_0}}[\lambda_t \|\mathbf{x_0} - \hat{\mathbf{x}}_0\|^2] + \frac{1}{2 \tilde{\Sigma}} || \mathcal{R}(\mathbf{x}_0^*)(\mathbf{x}_t,t)||^2$")
     ax.set_title("Train vs Validation loss")
     ax.set_yscale("log")
@@ -926,28 +933,29 @@ def era5_residuals_plot(model, conditional, model_id, normalize=True):
     residual_losses = [loss_geo_wind, loss_planetary, loss_qgpv]
     for res_var, res_loss in zip(residual_variables, residual_losses):
         residual = res_loss[0].cpu().numpy()
-        visualize_era5_sample(residual, res_var, "500", big_data_sample=None, dir=Path("./reports/figures") / model_id / f"residuals")    
+        visualize_era5_sample(residual, res_var, "500", big_data_sample=None, dir=Path("./reports/figures") / model_id / f"residuals")
 
 if __name__ == "__main__":
     from pde_diff.utils import DatasetRegistry, LossRegistry
     plot_darcy = False
-    plot_data_samples = True
-    plot_era5_training = False
+    plot_data_samples = False
+    plot_era5_training = True
     plot_era5_residual = False
 
     if plot_era5_training:
         # PLOT ERA 5 THINGS:
         # -------------------------------
         model_path = Path('./models')
-        model_ids =  ['era5_ext-base','era5_ext-c1e2'] #["era5_ext-base"]#['era5_baseline-v2', 'era5_baseline-c1e1', 'era5_baseline-c1e2','era5_baseline-c1e3']
+        model_ids =  ['era5_cleanhp_30e-base','era5_cleanhp_30e-c1e2','era5_cleanhp_30e-c1e3'] #["era5_ext-base"]#['era5_baseline-v2', 'era5_baseline-c1e1', 'era5_baseline-c1e2','era5_baseline-c1e3']
         #plot_and_save_era5(f"logs/era5_baseline-v2-1/version_0/metrics.csv", Path(f"reports/figures/{model_id}"))
 
         plot_cv_val_metrics(
             model_ids=model_ids,
-            fold_num=5,
+            fold_num=1,
             log_path="logs",
             out_dir=f"reports/figures/era5_baseline_comparisons",
-            smooth_window=20,
+            smooth_window=1,
+            data_type="era5"
         )
         # ---------------------------------------------------
 
