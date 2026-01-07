@@ -49,9 +49,9 @@ class PDE_loss(nn.Module):
             total /= self.num_active_residuals
 
         if self.c_data is None:
-            total = self.mse(model_out, target).mean()
+            total += self.mse(model_out, target).mean()
         else:
-            total = (self.mse(model_out, target) * self.c_data[:, None, None, None]).mean()
+            total += (self.mse(model_out, target) * self.c_data[:, None, None, None]).mean()
 
         return total
 
