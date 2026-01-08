@@ -476,7 +476,6 @@ def load_model_stats(model_id, smooth_window=1, fold_num=0, log_path="logs", dat
             .dropna(subset=["step"])
             .sort_values("step")
         )
-        print(f"Loaded metrics from {csv_path} with {len(df)} entries.")
 
     def append_if(df: pd.DataFrame, col: str, target: list):
         if col in df.columns:
@@ -565,6 +564,10 @@ def load_model_stats(model_id, smooth_window=1, fold_num=0, log_path="logs", dat
     res2_mean, res2_low, res2_high = mean_ci(res2_pv_sample)
     res3_mean, res3_low, res3_high = mean_ci(res3_geowind_sample)
 
+    total_era_res_mean = res1_mean + res2_mean + res3_mean
+    total_era_res_low  = res1_low  + res2_low  + res3_low
+    total_era_res_high = res1_high + res2_high + res3_high
+
     # Number of *smoothed* points
     epochs = res_mean.shape[0] if len(res_mean.shape) > 1 else len(res_mean)
     # TODO: This is actually epochs which makes the plots wrong, it is number of smoothed points
@@ -587,6 +590,9 @@ def load_model_stats(model_id, smooth_window=1, fold_num=0, log_path="logs", dat
         "res1_mean": res1_mean, "res1_low": res1_low, "res1_high": res1_high,
         "res2_mean": res2_mean, "res2_low": res2_low, "res2_high": res2_high,
         "res3_mean": res3_mean, "res3_low": res3_low, "res3_high": res3_high,
+        "total_era_res_mean": total_era_res_mean,
+        "total_era_res_low": total_era_res_low,
+        "total_era_res_high": total_era_res_high,
     }
 
 
@@ -651,11 +657,12 @@ def plot_cv_val_metrics(model_ids, fold_num, log_path, out_dir, smooth_window=10
     ax = axes[0]
 
     # fill in the loss curves for diffusion and pidm
-    ax = fill_in_ax(ax, x, stats1, "res", epochs, diffusion_colors[0], "Diffusion")
+    res_str = "total_era_res" if data_type == "era5" else "res"
+    ax = fill_in_ax(ax, x, stats1, res_str, epochs, diffusion_colors[0], "Diffusion")
     if len(model_ids) > 1:
         for i, model_id_2 in enumerate(model_ids[1:]):
             suffix = model_id_to_name.get(model_id_2.split('-')[-1], "")
-            ax = fill_in_ax(ax, x, stats2[i], "res", epochs, pidm_colors[i], f"PIDM-{suffix}")
+            ax = fill_in_ax(ax, x, stats2[i], res_str, epochs, pidm_colors[i], f"PIDM-{suffix}")
 
     ax.set_xlabel(f"Epoch{f" (smoothed, window={smooth_window})" if smooth_window>1 else ""}")
     ax.set_ylabel(r"$\mathcal{R}_{\text{MAE}}(\mathbf{x_0}) \sim p_\theta (\mathbf{x_0})$")
@@ -1106,12 +1113,12 @@ if __name__ == "__main__":
         # PLOT ERA 5 THINGS:
         # -------------------------------
         model_path = Path('./models')
-        model_ids =  ['era5_cleanhp_50e-baseline','era5_cleanhp_50e-c1e1'] #["era5_ext-base"]#['era5_baseline-v2', 'era5_baseline-c1e1', 'era5_baseline-c1e2','era5_baseline-c1e3']
+        model_ids =  ['era5_cleanhp_50e-baseline','era5_cleanhp_50e-c1e1', 'era5_cleanhp_50e-c1e2', 'era5_cleanhp_50e-c1e3'] #["era5_ext-base"]#['era5_baseline-v2', 'era5_baseline-c1e1', 'era5_baseline-c1e2','era5_baseline-c1e3']
         #plot_and_save_era5(f"logs/era5_baseline-v2-1/version_0/metrics.csv", Path(f"reports/figures/{model_id}"))
 
         plot_cv_val_metrics(
             model_ids=model_ids,
-            fold_num=1,
+            fold_num=5,
             log_path="logs",
             out_dir=f"reports/figures/era5_baseline_comparisons",
             smooth_window=1,
@@ -1138,7 +1145,7 @@ if __name__ == "__main__":
         breakpoint()
     if plot_era5_residual_metrics:
         model_path = Path('./models')
-        model_ids = ['era5_cleanhp_50e-baseline','era5_cleanhp_50e-c1e1'] #["era5_ext-base"]#['era5_baseline-v2', 'era5_baseline-c1e1', 'era5_baseline-c1e2','era5_baseline-c1e3']
+        model_ids = ['era5_cleanhp_50e-baseline','era5_cleanhp_50e-c1e1', 'era5_cleanhp_50e-c1e2', 'era5_cleanhp_50e-c1e3'] #["era5_ext-base"]#['era5_baseline-v2', 'era5_baseline-c1e1', 'era5_baseline-c1e2','era5_baseline-c1e3']
         #plot_and_save_era5(f"logs/era5_baseline-v2-1/version_0/metrics.csv", Path(f"reports/figures/{model_id}"))
 
         plot_cv_residual_metrics_era5(
