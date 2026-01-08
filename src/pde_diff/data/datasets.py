@@ -409,7 +409,7 @@ class ERA5DatasetTest(ERA5Dataset):
             state_change = raw_state_change
         state_change = np.nan_to_num(state_change).astype(np.float32)
 
-        return (prev_inputs, state_change)
+        return (prev_inputs, state_change, raw_state )
 
 if __name__ == "__main__":
     # Test ERA5 data:
