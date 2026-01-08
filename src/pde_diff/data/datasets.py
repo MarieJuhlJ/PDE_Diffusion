@@ -174,7 +174,7 @@ class ERA5Dataset(Dataset):
 
     def _normalize(self, data, means, stds):
         return (data - means[:, None, None]) / (stds[:, None, None] + 0.0001)
-    
+
     def _unnormalize(self, data, means, stds):
         return data * (stds[:, None, None] + 0.0001) + means[:, None, None]
 
@@ -313,6 +313,103 @@ def increment_clock_features(clock_features: torch.Tensor, step_size: int) -> to
         [sin_day_of_year, cos_day_of_year, sin_local_mean_time, cos_local_mean_time], dim=1
     )
     return updated_clock_features
+
+@DatasetRegistry.register("era5_test")
+class ERA5DatasetTest(ERA5Dataset):
+    """
+    Dataset class for ERA5 test data.
+    The get item returns multiple forecast steps in the future for comparison.
+    """
+
+    def __init__(
+        self,
+        cfg: DictConfig,
+    ):
+
+        super().__init__(cfg)
+        self.forecast_steps = cfg.get("forecast_steps", 5)
+
+    def __len__(self):
+        return sum(self.data["time.year"].values <= self.max_year) - 2 * self.time_step - (self.forecast_steps - 1) * self.time_step
+
+    def __getitem__(self, item):
+        ds_conditionals = self.data.isel(time=[item, item + self.time_step])
+        ds_state = self.data.isel(time=list(range(item + 2 * self.time_step, item + 2 * self.time_step + self.forecast_steps * self.time_step, self.time_step)))
+
+        # Load inputs data
+        ds_conditionals_atm = (
+            ds_conditionals[self.atmospheric_features]
+            .to_array()
+            .transpose("time", "longitude", "latitude", "isobaricInhPa", "variable")
+            .values
+        )
+        ds_conditionals_atm = einops.rearrange(ds_conditionals_atm, "t lon lat lev var -> t  (var lev) lon lat")
+        raw_inputs = ds_conditionals_atm
+
+        if self.single_features:
+            ds_conditionals_single = (
+                ds_conditionals[self.single_features]
+                .to_array()
+                .transpose("time", "longitude", "latitude", "variable")
+                .values
+            )
+            ds_conditionals_single = einops.rearrange(ds_conditionals_single, "t lon lat var -> t var lon lat")
+            raw_inputs = np.concatenate([raw_inputs, ds_conditionals_single], axis=1)
+
+        if self.static_features:
+            ds_conditionals_static = (
+                ds_conditionals[self.static_features]
+                .to_array()
+                .transpose("longitude", "latitude", "variable")
+                .values
+            )
+            ds_conditionals_static = np.stack([ds_conditionals_static] * 2, axis=0)
+            ds_conditionals_static = einops.rearrange(ds_conditionals_static, "t lon lat var -> t (var) lon lat")
+            raw_inputs = np.concatenate([raw_inputs, ds_conditionals_static], axis=1)
+
+
+        # Normalize inputs
+        if self.normalization_on:
+            inputs_norm = self._normalize(raw_inputs, self.means, self.stds)
+        else:
+            inputs_norm = raw_inputs
+
+        # Add time features
+        clock_features = self._generate_clock_features(ds_conditionals)
+        inputs = np.concatenate([inputs_norm, clock_features], axis=1)
+
+        # Concatenate timesteps
+        inputs = np.concatenate([inputs[0, :, :, :], inputs[1, :, :, :]], axis=0)
+        prev_inputs = np.nan_to_num(inputs).astype(np.float32)
+
+        # Load target data
+        ds_state_atm = (
+            ds_state[self.atmospheric_features]
+            .to_array()
+            .transpose("time","longitude", "latitude", "isobaricInhPa", "variable")
+            .values
+        )
+        ds_state_atm = einops.rearrange(ds_state_atm, "t lon lat lev var -> t (var lev) lon lat")
+        raw_state = ds_state_atm
+        if self.single_features:
+            ds_state_single = (
+                ds_state[self.single_features]
+                .to_array()
+                .transpose("time","longitude", "latitude", "variable")
+                .values
+            )
+            ds_state_single = einops.rearrange(ds_state_single, "t lon lat var -> t (var) lon lat")
+            raw_state = np.concatenate([raw_state, ds_state_single], axis=1)
+
+        # Normalize target state changes
+        raw_state_change = raw_state - np.concatenate([raw_inputs[None,1, :, :, :], raw_state[:-1,:,:,:]], axis=0)
+        if self.normalization_on:
+            state_change = self._normalize(raw_state_change, self.diff_means, self.diff_stds)
+        else:
+            state_change = raw_state_change
+        state_change = np.nan_to_num(state_change).astype(np.float32)
+
+        return (prev_inputs, state_change)
 
 if __name__ == "__main__":
     # Test ERA5 data:
