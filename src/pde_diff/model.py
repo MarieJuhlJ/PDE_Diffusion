@@ -212,9 +212,11 @@ class DiffusionModel(pl.LightningModule):
         return samples
 
     def forecast(self, initial_condition, steps):
+        """Forecast multiple steps ahead given an initial condition tensor.
+        Returns the predicted changes at each forecast step."""
         self.model.eval()
         current_state = initial_condition.to(self.device)
-        forecasted_states = []
+        forecasted_changes = []
 
         for step in range(steps):
             with torch.no_grad():
@@ -226,9 +228,9 @@ class DiffusionModel(pl.LightningModule):
                     next_state[:, -4:, :, :], step_size=self.cfg.dataset.time_step
                 ).to(self.device)
                 current_state = torch.cat([current_state[:,-(self.data_dims.input_dims-self.data_dims.output_dims)//2:,:,:], next_state], dim=1)
-            forecasted_states.append(next_state[:,:-4, :, :].cpu())
+            forecasted_changes.append(prediction)
 
-        return torch.stack(forecasted_states, dim=1)
+        return torch.stack(forecasted_changes, dim=1)
 
     def ddim_forward(self, samples, t, t_prev): #this assumes model predicts epsilon
         z = torch.randn_like(samples) if t_prev > 0 else 0
