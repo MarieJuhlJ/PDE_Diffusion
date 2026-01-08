@@ -52,7 +52,7 @@ def plot_sample_target_absdiff_stacked(
         ncols=2,
         width_ratios=[40, 1],   # thin colorbars
         height_ratios=[1, 1, 1],
-        hspace=0.2,            # vertical spacing
+        hspace=0.25,            # vertical spacing
         wspace=0.05,            # gap to colorbar
     )
 
@@ -71,7 +71,10 @@ def plot_sample_target_absdiff_stacked(
         vmax=vmax,
         aspect="auto",
     )
-    ax1.set_title("Forecast sample")
+    ax1.set_title(f"Forecast of {VAR_NAMES.get(variable, variable)}")
+    ax1.set_xticklabels([])
+    ax1.set_xlim(EXTENT_SUBSET[0], EXTENT_SUBSET[1])
+    ax1.set_ylim(EXTENT_SUBSET[3], EXTENT_SUBSET[2])
 
     im2 = ax2.imshow(
         target.T,
@@ -81,18 +84,23 @@ def plot_sample_target_absdiff_stacked(
         vmax=vmax,
         aspect="auto",
     )
-    ax2.set_title("Target")
+    ax2.set_title(f"True state of {VAR_NAMES.get(variable, variable)}")
+    ax2.set_xticklabels([])
+    ax2.set_xlim(EXTENT_SUBSET[0], EXTENT_SUBSET[1])
+    ax2.set_ylim(EXTENT_SUBSET[3], EXTENT_SUBSET[2])
 
-    plt.colorbar(im1, cax=cax_top)
+    plt.colorbar(im1, cax=cax_top,label=f"{VAR_UNITS.get(variable, variable)}")
 
-    diff = sample - target
+    diff = target - sample
     im3 = ax3.imshow(
         diff.T,
         cmap="PuOr",
         extent=EXTENT_SUBSET,
         aspect="auto",
     )
-    ax3.set_title("Difference")
+    ax3.set_title(f"Difference of {VAR_NAMES.get(variable, variable)} " +r"$(x_0-\hat{x}_0)$")
+    ax3.set_xlim(EXTENT_SUBSET[0], EXTENT_SUBSET[1])
+    ax3.set_ylim(EXTENT_SUBSET[3], EXTENT_SUBSET[2])
     print(f"Max absolute difference for variable {variable}, sample {sample_idx}: {diff.max():.4f}")
 
     plt.colorbar(im3, cax=cax_bot)
@@ -172,18 +180,14 @@ def plot_forecasts_vs_targets(
         ax_t.imshow(targets[i].T, cmap=cmap,vmin=vmin,vmax=vmax,aspect="auto",extent=EXTENT_SUBSET,)
         im_diff = ax_d.imshow(differences[i].T,vmin=vmin_d,vmax=vmax_d, cmap="PuOr",aspect="auto",extent=EXTENT_SUBSET,)
 
+        for axs in [ax_f, ax_t, ax_d]:
+            axs.set_xlim(EXTENT_SUBSET[0], EXTENT_SUBSET[1])
+            axs.set_ylim(EXTENT_SUBSET[3], EXTENT_SUBSET[2])
+            axs.set_yticks([])
+            if i < 4:
+                axs.set_xticklabels([])
         # Step numbering on the left
         ax_f.set_ylabel(f"Step {i+1}", rotation=0, labelpad=15, va="center")
-
-        # Clean look
-        ax_f.set_yticks([])
-        ax_t.set_yticks([])
-        ax_d.set_yticks([])
-
-        if i < 4:
-            ax_f.set_xticklabels([])
-            ax_t.set_xticklabels([])
-            ax_d.set_xticklabels([])
 
         axes_forecast.append(ax_f)
         axes_target.append(ax_t)
@@ -220,3 +224,116 @@ def plot_forecasts_vs_targets(
     plt.close()
 
     print(f"Saved forecast vs target plot to {out_path}")
+
+def plot_residuals_with_truth(
+    residual_pred: torch.Tensor,
+    residual_true: torch.Tensor,
+    name: str,
+    sample_idx: int = 0,
+    show_difference: bool = True,
+    dir=Path("./reports/figures/samples"),
+):
+    """
+    Plot residual errors from forecast and true state, optionally with their difference.
+
+    Parameters
+    ----------
+    residual_pred : torch.Tensor
+        Residual error computed from forecasted changes
+    residual_true : torch.Tensor
+        Residual error computed from true changes
+    name : str
+        Name of the residual (e.g. 'Geostrophic wind', 'QGPV')
+    sample_idx : int
+        Sample index for file naming
+    show_difference : bool
+        Whether to plot residual difference (pred - true)
+    dir : Path
+        Output directory
+    """
+
+    residual_pred = residual_pred.detach().cpu().numpy()
+    residual_true = residual_true.detach().cpu().numpy()
+
+    vmin = min(residual_pred.min(), residual_true.min())
+    vmax = max(residual_pred.max(), residual_true.max())
+
+    nrows = 3 if show_difference else 2
+
+    fig = plt.figure(figsize=(10, 3 if show_difference else 2.2), constrained_layout=True)
+
+    gs = fig.add_gridspec(
+        nrows=nrows,
+        ncols=2,
+        width_ratios=[40, 1],
+        height_ratios=[1] * nrows,
+        hspace=0.25,
+        wspace=0.05,
+    )
+
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax2 = fig.add_subplot(gs[1, 0])
+
+    if show_difference:
+        ax3 = fig.add_subplot(gs[2, 0])
+        cax_top = fig.add_subplot(gs[0:2, 1])
+        cax_bot = fig.add_subplot(gs[2, 1])
+    else:
+        cax_top = fig.add_subplot(gs[:, 1])
+
+    # --- Forecast residual ---
+    im1 = ax1.imshow(
+        residual_pred.T,
+        cmap="magma",
+        extent=EXTENT_SUBSET,
+        vmin=vmin,
+        vmax=vmax,
+        aspect="auto",
+    )
+    ax1.set_title(f"Forecast residual |ℛ(ẋ₀)|")
+
+    # --- True-state residual ---
+    im2 = ax2.imshow(
+        residual_true.T,
+        cmap="magma",
+        extent=EXTENT_SUBSET,
+        vmin=vmin,
+        vmax=vmax,
+        aspect="auto",
+    )
+    ax2.set_title(f"True-state residual |ℛ(x₀)|")
+
+    plt.colorbar(im1, cax=cax_top, label=name)
+
+    # --- Difference (optional) ---
+    if show_difference:
+        diff = residual_pred - residual_true
+        im3 = ax3.imshow(
+            diff.T,
+            cmap="PuOr",
+            extent=EXTENT_SUBSET,
+            aspect="auto",
+        )
+        ax3.set_title(r"Residual difference $|\mathcal{R}(\hat{x}_0)| - |\mathcal{R}(x_0)|$")
+        plt.colorbar(im3, cax=cax_bot)
+
+        print(
+            f"Max abs residual difference ({name}, sample {sample_idx}): "
+            f"{np.abs(diff).max():.4f}"
+        )
+
+    for ax in (ax1, ax2) if not show_difference else (ax1, ax2, ax3):
+        ax.set_xticklabels([])
+        ax.set_yticks([])
+        ax.set_xlim(EXTENT_SUBSET[0], EXTENT_SUBSET[1])
+        ax.set_ylim(EXTENT_SUBSET[3], EXTENT_SUBSET[2])
+
+    suffix = "with_diff" if show_difference else "no_diff"
+    out_path = os.path.join(
+        dir, f"residual_{name.replace(" ", "_")}_{suffix}_{sample_idx}.png"
+    )
+
+    plt.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close()
+
+    print(f"Saved residual plot to {out_path}")

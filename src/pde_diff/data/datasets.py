@@ -402,7 +402,7 @@ class ERA5DatasetTest(ERA5Dataset):
             raw_state = np.concatenate([raw_state, ds_state_single], axis=1)
 
         # Normalize target state changes
-        raw_state_change = raw_state - np.concatenate([raw_inputs[None,1, :, :, :], raw_state[:-1,:,:,:]], axis=0)
+        raw_state_change = raw_state - np.copy(np.concatenate([raw_inputs[None,1, :, :, :], raw_state[:-1,:,:,:]], axis=0))
         if self.normalization_on:
             state_change = self._normalize(raw_state_change, self.diff_means, self.diff_stds)
         else:

@@ -16,7 +16,7 @@ from pde_diff.model import DiffusionModel
 from pde_diff.data.utils import split_dataset
 import pde_diff.loss
 from pde_diff.visualize import visualize_era5_sample
-from pde_diff.visualize_eval import plot_forecast_loss_vs_steps, plot_sample_target_absdiff_stacked, plot_forecasts_vs_targets
+from pde_diff.visualize_eval import plot_forecast_loss_vs_steps, plot_sample_target_absdiff_stacked, plot_forecasts_vs_targets,plot_residuals_with_truth
 
 
 
@@ -32,6 +32,7 @@ def evaluate(cfg: DictConfig):
     model = DiffusionModel(cfg)
     model = model.to("cuda" if torch.cuda.is_available() else "cpu")
     model.load_state_dict(torch.load(cfg.model.path + "/best-val_loss-weights.pt"))
+
     cfg.dataset.path= "./data/era5/zarr_test/"
     OmegaConf.set_struct(cfg, True)
     with open_dict(cfg):
@@ -127,7 +128,7 @@ def save_samples(forecasted_states, dir: Path, target_states=None):
     print(f"Forecasted samples saved to {pickle_path}.")
 
 
-def evaluate_forecasting(model: DiffusionModel, dataset_test: DataLoader, steps: int=8, losses: list[str]=["mse", "fb"], dir=Path("reports/figures")) -> dict[str, list[float]]:
+def evaluate_forecasting(model: DiffusionModel, dataset_test: Dataset, steps: int=8, losses: list[str]=["mse", "fb"], dir=Path("reports/figures")) -> dict[str, list[float]]:
 
     dataloader_test = DataLoader(dataset_test,
                             batch_size=1,
@@ -135,7 +136,8 @@ def evaluate_forecasting(model: DiffusionModel, dataset_test: DataLoader, steps:
                             num_workers=4,
                             persistent_workers=True,
                             )
-
+    vor_loss = model.loss_fn
+    vor_loss.set_mean_and_std(dataset_test.means, dataset_test.stds, dataset_test.diff_means, dataset_test.diff_stds)
     loss_fns = {"mse": LossRegistry.create(OmegaConf.create({"name":"mse"})) ,
                 "residual": model.loss_fn}
 
@@ -158,18 +160,31 @@ def evaluate_forecasting(model: DiffusionModel, dataset_test: DataLoader, steps:
                     l = loss_fn(forecasted_changes[k], targets[k])
                     loss[loss_name][str(k+1)].append(l.item())
             else:
-                loss_geo_wind = loss_fn.compute_residual_geostrophic_wind(x0_previous=prev_states, x0_change_pred=forecasted_changes, normalize=True).abs().mean(dim=(1, 2, 3))
-                loss_planetary = loss_fn.compute_residual_planetary_vorticity(x0_previous=prev_states, x0_change_pred=forecasted_changes, normalize=True).abs().mean(dim=(1, 2, 3))
-                loss_qgpv = loss_fn.compute_residual_qgpv(x0_previous=prev_states, x0_change_pred=forecasted_changes, normalize=True).abs().mean(dim=(1, 2))
+                loss_geo_wind = loss_fn.compute_residual_geostrophic_wind(x0_previous=prev_states, x0_change_pred=forecasted_changes, normalize=True).abs()
+                mean_loss_geo_wind = loss_geo_wind.mean(dim=(1, 2, 3))
+                loss_planetary = loss_fn.compute_residual_planetary_vorticity(x0_previous=prev_states, x0_change_pred=forecasted_changes, normalize=True).abs()
+                mean_loss_planetary = loss_planetary.mean(dim=(1, 2, 3))
+                loss_qgpv = loss_fn.compute_residual_qgpv(x0_previous=prev_states, x0_change_pred=forecasted_changes, normalize=True).abs()
+                mean_loss_qgpv = loss_qgpv.mean(dim=(1, 2))
                 for k in range(steps):
-                    loss["val_era5_sampled_planetary_residual(norm)"][str(k+1)].append(loss_planetary[k].cpu())
-                    loss["val_era5_sampled_geo_wind_residual(norm)"][str(k+1)].append(loss_geo_wind[k].cpu())
-                    loss["val_era5_sampled_qgpv_residual(norm)"][str(k+1)].append(loss_qgpv[k].cpu())
+                    loss["val_era5_sampled_planetary_residual(norm)"][str(k+1)].append(mean_loss_planetary[k].item())
+                    loss["val_era5_sampled_geo_wind_residual(norm)"][str(k+1)].append(mean_loss_geo_wind[k].item())
+                    loss["val_era5_sampled_qgpv_residual(norm)"][str(k+1)].append(mean_loss_qgpv[k].item())
 
         if i==0:
             dir_sample=os.path.join(dir, f"sample_{i}")
             os.makedirs(dir_sample, exist_ok=True)
             lvl = 1
+
+            ### Plot residual errors:
+            loss_geo_wind_target = loss_fn.compute_residual_geostrophic_wind(x0_previous=prev_states_true, x0_change_pred=targets, normalize=True).abs()
+            loss_planetary_target = loss_fn.compute_residual_planetary_vorticity(x0_previous=prev_states_true, x0_change_pred=targets, normalize=True).abs()
+            loss_qgpv_target = loss_fn.compute_residual_qgpv(x0_previous=prev_states_true, x0_change_pred=targets, normalize=True).abs()
+
+            plot_residuals_with_truth(loss_geo_wind[0,lvl],loss_geo_wind_target[0,lvl],"Geostrophic Wind",sample_idx=0, dir=dir_sample)
+            plot_residuals_with_truth(loss_planetary[0,lvl],loss_planetary_target[0,lvl],"Planetary Vorticity", sample_idx=0,dir=dir_sample)
+            plot_residuals_with_truth(loss_qgpv[0],loss_qgpv_target[0],"QGPV", sample_idx=0, dir=dir_sample)
+
             """un_norm_cond = dataset_test._unnormalize(conditionals.detach().cpu(), dataset_test.means, dataset_test.stds)
             un_norm_forecasted_changes = dataset_test._unnormalize(forecasted_changes.detach().cpu(), dataset_test.diff_means, dataset_test.diff_stds)
             un_norm_forecasted_states = get_states(un_norm_cond, un_norm_forecasted_changes)
