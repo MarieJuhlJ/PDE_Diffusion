@@ -41,7 +41,7 @@ VAR_UNITS = {
     "v": r"$m \cdot s^{-1}$",
     "t": r"$K$",
     "z": r"$m^2 \cdot s^{-2}$",
-    "pv": r"$m^2 \cdot K \cdot Kg^{-1} \cdot s^{-1}$",
+    "pv": r"$s^{-1}$",
 }
 
 colors = ["brown", "white", "teal"]  # Transition from blue to white to red
@@ -1133,14 +1133,14 @@ if __name__ == "__main__":
         cfg = OmegaConf.load(model_path / (model_id) / "config.yaml")
         diffusion_model = DiffusionModel(cfg)
         diffusion_model.load_model(model_path / model_id / f"best-val_loss-weights.pt")
-        
+
         #Load data
         dataset = DatasetRegistry.create(cfg.dataset)
         dataset_train, dataset_val = split_dataset(cfg, dataset)
-        
+
         conditional = dataset_val[0][0]
         conditional = torch.tensor(conditional).unsqueeze(0).to('cpu')
-        
+
         era5_residuals_plot(diffusion_model, conditional, model_id, normalize=False)
         breakpoint()
     if plot_era5_residual_metrics:

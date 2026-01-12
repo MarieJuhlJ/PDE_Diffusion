@@ -221,8 +221,9 @@ class DiffusionModel(pl.LightningModule):
         for step in range(steps):
             with torch.no_grad():
                 prediction = self.sample_loop(batch_size=current_state.size(0), conditionals=current_state)
-                next_state = current_state[:,-(self.data_dims.input_dims-self.data_dims.output_dims)//2:,:,:]
-                next_state[:,:self.data_dims.output_dims, :, :] += prediction
+                next_state = current_state[:,-(self.data_dims.input_dims-self.data_dims.output_dims)//2:,:,:].clone()
+                next_state[:,:self.data_dims.output_dims, :, :] = self.loss_fn.get_original_states(x0_previous=next_state[:,:self.data_dims.output_dims], x0_change_pred=prediction, rearrange=False)[1]
+                next_state[:,:self.data_dims.output_dims] = self.loss_fn.get_normalized_states(x0=next_state[:,:self.data_dims.output_dims, :, :] )
                 # Update next_state with time information:
                 next_state[:, -4:, :, :] = increment_clock_features(
                     next_state[:, -4:, :, :], step_size=self.cfg.dataset.time_step

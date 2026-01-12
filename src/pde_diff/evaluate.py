@@ -18,20 +18,19 @@ import pde_diff.loss
 from pde_diff.visualize import visualize_era5_sample
 from pde_diff.visualize_eval import plot_forecast_loss_vs_steps, plot_sample_target_absdiff_stacked, plot_forecasts_vs_targets,plot_residuals_with_truth
 
-
-
 @hydra.main(version_base=None, config_name="evaluate.yaml", config_path="../../configs")
 def evaluate(cfg: DictConfig):
     # load model config from cfg.model.path
     best_fold= find_best_fold(cfg.model.path)
     print(f"Best fold: {best_fold[0]} with val loss {best_fold[1]}")
-    model_cfg = OmegaConf.load(cfg.model.path.split("/")[0] + "/" + best_fold[0] + "/config.yaml")
+    model_path = cfg.model.path.split("/")[0] + "/" + best_fold[0]
+    model_cfg = OmegaConf.load(model_path + "/config.yaml")
     cfg = OmegaConf.merge(model_cfg, cfg)
 
     pl.seed_everything(cfg.seed)
     model = DiffusionModel(cfg)
     model = model.to("cuda" if torch.cuda.is_available() else "cpu")
-    model.load_state_dict(torch.load(cfg.model.path + "/best-val_loss-weights.pt"))
+    model.load_state_dict(torch.load(model_path + "/best-val_loss-weights.pt"))
 
     cfg.dataset.path= "./data/era5/zarr_test/"
     OmegaConf.set_struct(cfg, True)
@@ -45,7 +44,7 @@ def evaluate(cfg: DictConfig):
                                  num_workers=4,
                                  persistent_workers=True)
     dir = "logs"
-    name = cfg.experiment.name + "_" +cfg.id+"_eval"
+    name = cfg.experiment.name + "-" +cfg.id+"_eval"
     os.makedirs(dir, exist_ok=True)
     logger = pl.pytorch.loggers.CSVLogger(dir, name=name)
 
@@ -99,6 +98,7 @@ def find_best_fold(model_path, fold_no=5, log_path="logs"):
                 best_model = (current_model_id, min_val)
     else:
         # in case there are no csvs (only happens if a model was trained elsewhere)
+        print("No logs found, using single model.")
         best_model = (model_path.split('/')[-1], None)
 
     return best_model
@@ -182,25 +182,30 @@ def evaluate_forecasting(model: DiffusionModel, dataset_test: Dataset, steps: in
             loss_planetary_target = loss_fn.compute_residual_planetary_vorticity(x0_previous=prev_states_true, x0_change_pred=targets, normalize=True).abs()
             loss_qgpv_target = loss_fn.compute_residual_qgpv(x0_previous=prev_states_true, x0_change_pred=targets, normalize=True).abs()
 
-            plot_residuals_with_truth(loss_geo_wind[0,lvl],loss_geo_wind_target[0,lvl],"Geostrophic Wind",sample_idx=0, dir=dir_sample)
-            plot_residuals_with_truth(loss_planetary[0,lvl],loss_planetary_target[0,lvl],"Planetary Vorticity", sample_idx=0,dir=dir_sample)
-            plot_residuals_with_truth(loss_qgpv[0],loss_qgpv_target[0],"QGPV", sample_idx=0, dir=dir_sample)
+            plot_residuals_with_truth(loss_geo_wind[0,lvl],loss_geo_wind_target[0,lvl],"gw",sample_idx=0, dir=dir_sample)
+            plot_residuals_with_truth(loss_planetary[0,lvl],loss_planetary_target[0,lvl],"plan", sample_idx=0,dir=dir_sample)
+            plot_residuals_with_truth(loss_qgpv[0],loss_qgpv_target[0],"qgpv", sample_idx=0, dir=dir_sample)
 
-            """un_norm_cond = dataset_test._unnormalize(conditionals.detach().cpu(), dataset_test.means, dataset_test.stds)
+            conditionals_rearranged = ein.rearrange(conditionals, "b (state var) lon lat -> b state var lon lat", state = 2)
+            un_norm_cond = dataset_test._unnormalize(conditionals_rearranged[:,1,:15].detach().cpu(), dataset_test.means, dataset_test.stds)
             un_norm_forecasted_changes = dataset_test._unnormalize(forecasted_changes.detach().cpu(), dataset_test.diff_means, dataset_test.diff_stds)
             un_norm_forecasted_states = get_states(un_norm_cond, un_norm_forecasted_changes)
             un_norm_forecasted_states = ein.rearrange(un_norm_forecasted_states, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
 
-            un_norm_targets = dataset_test._unnormalize(targets.detach.cpu(), dataset_test.diff_means, dataset_test.diff_stds)
+            un_norm_targets = dataset_test._unnormalize(targets.detach().cpu(), dataset_test.diff_means, dataset_test.diff_stds)
             un_norm_target_states = get_states(un_norm_cond, un_norm_targets)
-            un_norm_target_states = ein.rearrange(un_norm_target_states, "b (var lev) lon lat -> b lev var lon lat", lev = 3)"""
+            un_norm_target_states = ein.rearrange(un_norm_target_states, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
+
+            un_norm_targets = ein.rearrange(un_norm_targets, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
+            un_norm_forecasted_changes = ein.rearrange(un_norm_forecasted_changes, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
 
 
             # un_norm_forecasted_states has shape [steps, levels,vars, lon, lat]
-            un_norm_forecasted_states =loss_fns["residual"].get_original_states(x0_previous=prev_states, x0_change_pred=forecasted_changes)[1]
-            un_norm_target_states =loss_fns["residual"].get_original_states(x0_previous=prev_states_true, x0_change_pred=targets[0])[1]
+            #un_norm_forecasted_states =loss_fns["residual"].get_original_states(x0_previous=prev_states, x0_change_pred=forecasted_changes)[1]
+            #un_norm_target_states =loss_fns["residual"].get_original_states(x0_previous=prev_states_true, x0_change_pred=targets[0])[1]
 
             raw_target_states = ein.rearrange(raw_target_states, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
+            assert torch.allclose(raw_target_states.detach().cpu(),un_norm_target_states,atol=1e-5,rtol=1e-6), "Problem, norm back and forth changing values too much"
 
             # Plot all targets and forecasts:
             for j,var in enumerate(["u","v","pv","t","z"]):
@@ -210,17 +215,24 @@ def evaluate_forecasting(model: DiffusionModel, dataset_test: Dataset, steps: in
                     variable=var,
                     sample_idx=i,
                     dir=dir_sample)
+                plot_forecasts_vs_targets(
+                    forecasts=[un_norm_forecasted_changes.detach().cpu()[k,lvl, j,:,:].detach().cpu() for k in range(un_norm_forecasted_states.shape[0])],
+                    targets=[un_norm_targets.detach().cpu()[k,lvl, j,:,:] for k in range(un_norm_target_states.shape[0])],
+                    variable=var,
+                    sample_idx=i,
+                    dir=dir_sample,
+                    states=False)
 
-            save_samples(un_norm_forecasted_states[:,lvl].detach().cpu(), dir=dir_sample, target_states=un_norm_target_states[:,lvl].detach().cpu())
+            #save_samples(un_norm_forecasted_states[:,lvl].detach().cpu(), dir=dir_sample, target_states=un_norm_target_states[:,lvl].detach().cpu())
     return loss
 
 def get_states(conds, state_changes):
     states = []
-    next_state = conds[0,19:34,:,:] + state_changes[0,:,:,:]
-    states.append(next_state)
+    next_state = conds[0,19:34,:,:] + state_changes[0,:,:,:] if conds.shape[1]>15 else conds[0,:,:,:] + state_changes[0,:,:,:]
+    states.append(next_state.clone())
     for step in range(1, state_changes.shape[0]):
         next_state = next_state + state_changes[step,:,:,:]
-        states.append(next_state)
+        states.append(next_state.clone())
     return torch.stack(states, dim=0)
 
 if __name__ == "__main__":
