@@ -145,9 +145,10 @@ def evaluate_forecasting(model: DiffusionModel, dataset_test: Dataset, steps: in
     loss = {loss: {str(i+1): [] for i in range(steps)} for loss in losses}
 
     for i, state in enumerate(tqdm(dataloader_test)):
-        conditionals, targets = state
+        conditionals, targets, raw_target_states = state
         conditionals = conditionals.to(model.device)
         targets = targets[0].to(model.device)
+        raw_target_states = raw_target_states[0].to(model.device)
 
         forecasted_changes = model.forecast(conditionals, steps=steps)[0]
         forecasted_states = get_states(conditionals, forecasted_changes)
@@ -171,7 +172,7 @@ def evaluate_forecasting(model: DiffusionModel, dataset_test: Dataset, steps: in
                     loss["val_era5_sampled_geo_wind_residual(norm)"][str(k+1)].append(mean_loss_geo_wind[k].item())
                     loss["val_era5_sampled_qgpv_residual(norm)"][str(k+1)].append(mean_loss_qgpv[k].item())
 
-        if i==0:
+        if i<3:
             dir_sample=os.path.join(dir, f"sample_{i}")
             os.makedirs(dir_sample, exist_ok=True)
             lvl = 1
@@ -199,11 +200,13 @@ def evaluate_forecasting(model: DiffusionModel, dataset_test: Dataset, steps: in
             un_norm_forecasted_states =loss_fns["residual"].get_original_states(x0_previous=prev_states, x0_change_pred=forecasted_changes)[1]
             un_norm_target_states =loss_fns["residual"].get_original_states(x0_previous=prev_states_true, x0_change_pred=targets[0])[1]
 
+            raw_target_states = ein.rearrange(raw_target_states, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
+
             # Plot all targets and forecasts:
             for j,var in enumerate(["u","v","pv","t","z"]):
                 plot_forecasts_vs_targets(
                     forecasts=[un_norm_forecasted_states.detach().cpu()[k,lvl, j,:,:].detach().cpu() for k in range(un_norm_forecasted_states.shape[0])],
-                    targets=[un_norm_target_states.detach().cpu()[k,lvl, j,:,:] for k in range(un_norm_target_states.shape[0])],
+                    targets=[raw_target_states.detach().cpu()[k,lvl, j,:,:] for k in range(un_norm_target_states.shape[0])],
                     variable=var,
                     sample_idx=i,
                     dir=dir_sample)

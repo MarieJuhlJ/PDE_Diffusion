@@ -74,7 +74,7 @@ def plot_sample_target_absdiff_stacked(
     ax1.set_title(f"Forecast of {VAR_NAMES.get(variable, variable)}")
     ax1.set_xticklabels([])
     ax1.set_xlim(EXTENT_SUBSET[0], EXTENT_SUBSET[1])
-    ax1.set_ylim(EXTENT_SUBSET[3], EXTENT_SUBSET[2])
+    ax1.set_ylim(EXTENT_SUBSET[2],EXTENT_SUBSET[3])
 
     im2 = ax2.imshow(
         target.T,
@@ -87,7 +87,7 @@ def plot_sample_target_absdiff_stacked(
     ax2.set_title(f"True state of {VAR_NAMES.get(variable, variable)}")
     ax2.set_xticklabels([])
     ax2.set_xlim(EXTENT_SUBSET[0], EXTENT_SUBSET[1])
-    ax2.set_ylim(EXTENT_SUBSET[3], EXTENT_SUBSET[2])
+    ax2.set_ylim(EXTENT_SUBSET[2],EXTENT_SUBSET[3])
 
     plt.colorbar(im1, cax=cax_top,label=f"{VAR_UNITS.get(variable, variable)}")
 
@@ -100,7 +100,7 @@ def plot_sample_target_absdiff_stacked(
     )
     ax3.set_title(f"Difference of {VAR_NAMES.get(variable, variable)} " +r"$(x_0-\hat{x}_0)$")
     ax3.set_xlim(EXTENT_SUBSET[0], EXTENT_SUBSET[1])
-    ax3.set_ylim(EXTENT_SUBSET[3], EXTENT_SUBSET[2])
+    ax3.set_ylim(EXTENT_SUBSET[2],EXTENT_SUBSET[3])
     print(f"Max absolute difference for variable {variable}, sample {sample_idx}: {diff.max():.4f}")
 
     plt.colorbar(im3, cax=cax_bot)
@@ -182,7 +182,7 @@ def plot_forecasts_vs_targets(
 
         for axs in [ax_f, ax_t, ax_d]:
             axs.set_xlim(EXTENT_SUBSET[0], EXTENT_SUBSET[1])
-            axs.set_ylim(EXTENT_SUBSET[3], EXTENT_SUBSET[2])
+            axs.set_ylim(EXTENT_SUBSET[2],EXTENT_SUBSET[3])
             axs.set_yticks([])
             if i < 4:
                 axs.set_xticklabels([])
@@ -326,7 +326,7 @@ def plot_residuals_with_truth(
         ax.set_xticklabels([])
         ax.set_yticks([])
         ax.set_xlim(EXTENT_SUBSET[0], EXTENT_SUBSET[1])
-        ax.set_ylim(EXTENT_SUBSET[3], EXTENT_SUBSET[2])
+        ax.set_ylim(EXTENT_SUBSET[2], EXTENT_SUBSET[3])
 
     suffix = "with_diff" if show_difference else "no_diff"
     out_path = os.path.join(
