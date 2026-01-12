@@ -18,33 +18,33 @@ import numpy as np
 # ERA5_DIFF_MEAN and ERA5_DIFF_STD are the means and stds of 12h timesteps differences.
 
 ERA5_MEANS = {
-    'v':  np.array([-0.0801555 , -0.10157621, -0.13813713], dtype=np.float32),
-    'u':  np.array([10.284327, 11.377211, 12.609484], dtype=np.float32),
-    'pv': np.array([6.3948687e-07, 6.3594905e-07, 6.3737781e-07], dtype=np.float32),
-    't':  np.array([255.84659, 251.32251, 246.14778], dtype=np.float32),
-    'z':  np.array([47262.523, 54204.25 , 61730.36 ], dtype=np.float32)
+    "v":  np.array([-0.05439724, -0.08053342, -0.11585448], dtype=np.float32),
+    "u":  np.array([ 7.827743,    8.673528,    9.614547  ], dtype=np.float32),
+    "pv": np.array([ 6.6577229e-07, 6.5286338e-07, 6.3751554e-07], dtype=np.float32),
+    "t":  np.array([258.6171,    254.0188,    248.74092 ], dtype=np.float32),
+    "z":  np.array([47717.152,   54734.59,    62341.297 ], dtype=np.float32),
 }
 
 ERA5_STD = {
-    'v':  np.array([ 9.1059265, 10.151677 , 11.447809 ], dtype=np.float32),
-    'u':  np.array([ 9.811623, 10.794332, 12.126493], dtype=np.float32),
-    'pv': np.array([3.8189577e-07, 4.0063446e-07, 4.8568654e-07], dtype=np.float32),
-    't':  np.array([6.594297 , 6.6641073, 6.6774826], dtype=np.float32),
-    'z':  np.array([1397.7808, 1548.3698, 1721.3713], dtype=np.float32)
+    "v":  np.array([ 9.286872,  10.145261,  11.228227], dtype=np.float32),
+    "u":  np.array([ 9.454823,  10.330215,  11.460713], dtype=np.float32),
+    "pv": np.array([ 3.5212761e-07, 3.6951292e-07, 4.2559611e-07], dtype=np.float32),
+    "t":  np.array([ 5.674391,   5.7301693,  5.7954497], dtype=np.float32),
+    "z":  np.array([1414.9316,  1542.6438,  1688.6382], dtype=np.float32),
 }
 
 ERA5_DIFF_MEAN = {
-    'v':  np.array([-0.0007102 ,  0.00128436, -0.00047651], dtype=np.float32),
-    'u':  np.array([-0.03137042, -0.02695089, -0.02360447], dtype=np.float32),
-    'pv': np.array([1.3307146e-09, 1.7303672e-09, 1.5463171e-09], dtype=np.float32),
-    't':  np.array([0.01117611, 0.01584899, 0.01999644], dtype=np.float32),
-    'z':  np.array([-1.2831955 , -0.90843827, -0.355297  ], dtype=np.float32)
+    "v":  np.array([ 8.0633363e-05,  4.3448286e-05, -2.4536726e-04], dtype=np.float32),
+    "u":  np.array([ 2.95522e-03,     3.39574e-03,     4.08541e-03   ], dtype=np.float32),
+    "pv": np.array([-5.3399271e-11,  -4.5271079e-12,   9.5704816e-12], dtype=np.float32),
+    "t":  np.array([-7.26565e-03,    -7.09030e-03,    -6.85968e-03  ], dtype=np.float32),
+    "z":  np.array([-1.1826048,      -1.381127,       -1.5934479    ], dtype=np.float32),
 }
 
 ERA5_DIFF_STD = {
-    'v':  np.array([1.3959143, 1.53918  , 1.7233391], dtype=np.float32),
-    'u':  np.array([1.1522577, 1.2496729, 1.412487 ], dtype=np.float32),
-    'pv': np.array([1.7968893e-07, 1.9385455e-07, 2.2434311e-07], dtype=np.float32),
-    't':  np.array([0.4210719 , 0.43234292, 0.4478308 ], dtype=np.float32),
-    'z':  np.array([49.822533, 54.978558, 61.497757], dtype=np.float32)
+    "v":  np.array([1.192583,   1.3096325, 1.4798834], dtype=np.float32),
+    "u":  np.array([1.0820649,  1.1679299, 1.2982965], dtype=np.float32),
+    "pv": np.array([1.7148871e-07, 1.8222345e-07, 2.0708451e-07], dtype=np.float32),
+    "t":  np.array([0.34212112, 0.35110953, 0.36627045], dtype=np.float32),
+    "z":  np.array([42.957813,  46.766777,  51.760887], dtype=np.float32),
 }
