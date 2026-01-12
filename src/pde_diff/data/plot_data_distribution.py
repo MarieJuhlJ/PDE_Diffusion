@@ -79,10 +79,11 @@ if __name__ == "__main__":
     fig, axes = plt.subplots(1, 3, figsize=(15, 4), sharey=True)
 
     plots = [
-        ("qgpv", r"\mathcal{R}_1 QGPV Residual"),
-        ("planetary_vorticity", r"\mathcal{R}_2 Planetary Vorticity Residual"),
-        ("geostrophic_wind", r"\mathcal{R}_3 Geostrophic Wind Residual"),
+        ("qgpv", r"$\mathcal{R}_1$ QGPV Residual"),
+        ("planetary_vorticity", r"$\mathcal{R}_2$ Planetary Vorticity Residual"),
+        ("geostrophic_wind", r"$\mathcal{R}_3$ Geostrophic Wind Residual"),
     ]
+
 
 import numpy as np
 

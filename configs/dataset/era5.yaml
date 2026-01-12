@@ -20,7 +20,7 @@ atmospheric_features:
 single_features: []
 static_features: []
 max_year: 2024
-time_step: 2
+time_step: 1
 
 "lon_range": null # Data is full range
 "lat_range": null # Already subsampled to [70, 46]

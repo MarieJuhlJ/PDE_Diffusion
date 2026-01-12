@@ -240,8 +240,9 @@ class DarcyLoss(PDE_loss):
 class VorticityLoss(PDE_loss):
     def __init__(self, cfg):
         residual_fns = [self.compute_residual_planetary_vorticity,
-                        self.compute_residual_geostrophic_wind,
-                        self.compute_residual_qgpv]
+                        self.compute_residual_qgpv,
+                        self.compute_residual_geostrophic_wind
+                        ]
         self.cfg = cfg
         device_str = OmegaConf.select(cfg, "device", default=None)
         self.device = torch.device(device_str) if device_str else torch.device("cuda" if torch.cuda.is_available() else "cpu")
