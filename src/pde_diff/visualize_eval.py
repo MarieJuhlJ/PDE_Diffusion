@@ -1,6 +1,12 @@
 import matplotlib.ticker as ticker
 
-from visualize import *
+from pde_diff.visualize import *
+
+RES_NAMES = {
+    "qgpv": ("Quasi-geostrophic Potential Vorticity", 1, r"rad $\cdot s^{-1}$"),
+    "plan": ("Planetary Vorticity",2, r"$s^{-2}$"),
+    "gw": ("Geostrophic Wind", 3,r"$m \cdot s^{-1}$")
+}
 
 # Define plotting helpers and load data. Keep functions concise and parameterized.
 def plot_forecast_loss_vs_steps(df, figsize=(8,5), dir=None, loss_name=None):
@@ -44,7 +50,14 @@ def plot_sample_target_absdiff_stacked(
     vmin = min(sample.min(), target.min())
     vmax = max(sample.max(), target.max())
 
-    fig = plt.figure(figsize=(10, 3))
+    fig = plt.figure(figsize=(8, 2.4), constrained_layout=True)
+
+    fig.set_constrained_layout_pads(
+        w_pad=0.00,
+        h_pad=0.00,
+        wspace=0.01,
+        hspace=0.00,
+    )
 
     # 3 rows, 2 columns (second column = colorbars)
     gs = fig.add_gridspec(
@@ -52,8 +65,6 @@ def plot_sample_target_absdiff_stacked(
         ncols=2,
         width_ratios=[40, 1],   # thin colorbars
         height_ratios=[1, 1, 1],
-        hspace=0.25,            # vertical spacing
-        wspace=0.05,            # gap to colorbar
     )
 
     ax1 = fig.add_subplot(gs[0, 0])
@@ -71,7 +82,7 @@ def plot_sample_target_absdiff_stacked(
         vmax=vmax,
         aspect="auto",
     )
-    ax1.set_title(f"Forecast of {VAR_NAMES.get(variable, variable)}")
+    ax1.set_title(f"Prediction of {VAR_NAMES.get(variable, variable)}")
     ax1.set_xticklabels([])
     ax1.set_xlim(EXTENT_SUBSET[0], EXTENT_SUBSET[1])
     ax1.set_ylim(EXTENT_SUBSET[2],EXTENT_SUBSET[3])
@@ -103,7 +114,7 @@ def plot_sample_target_absdiff_stacked(
     ax3.set_ylim(EXTENT_SUBSET[2],EXTENT_SUBSET[3])
     print(f"Max absolute difference for variable {variable}, sample {sample_idx}: {diff.max():.4f}")
 
-    plt.colorbar(im3, cax=cax_bot)
+    plt.colorbar(im3, cax=cax_bot,label=f"{VAR_UNITS.get(variable, variable)}")
 
     for ax in (ax1, ax2, ax3):
         ax.set_yticks([])
@@ -120,6 +131,7 @@ def plot_forecasts_vs_targets(
     variable: str = "t",
     sample_idx: int = 0,
     dir=Path("./reports/figures/samples"),
+    states=True
 ):
     """
     Plot recursive forecasts vs targets.
@@ -147,10 +159,10 @@ def plot_forecasts_vs_targets(
     vmin_d = min(f.min() for f in differences)
     vmax_d = max(f.max() for f in differences)
 
-    fig = plt.figure(figsize=(10, 3),constrained_layout=True)
+    fig = plt.figure(figsize=(10, 2.4),constrained_layout=True)
     fig.set_constrained_layout_pads(
         w_pad=0.02,
-        h_pad=0.01,   # ← this is the important one
+        h_pad=0.01,
         wspace=0.02,
         hspace=0.02,
     )
@@ -194,7 +206,11 @@ def plot_forecasts_vs_targets(
         axes_diff.append(ax_d)
 
     axes_forecast[0].set_title(f"Forecasts of {VAR_NAMES.get(variable, variable)}")
-    axes_target[0].set_title(f"True states of {VAR_NAMES.get(variable, variable)}")
+    if states:
+        axes_target[0].set_title(f"True states of {VAR_NAMES.get(variable, variable)}")
+    else:
+        axes_target[0].set_title(f"True changes of {VAR_NAMES.get(variable, variable)}")
+
     axes_diff[0].set_title(r"Difference $(x_0-\hat{x}_0)$")
 
     cax = fig.add_subplot(gs[:, 2])
@@ -218,7 +234,7 @@ def plot_forecasts_vs_targets(
         cbar2.formatter = formatter2
         cbar2.update_ticks()
 
-    out_path = os.path.join(dir, f"forecasts_vs_targets_w_diff_sample_{sample_idx}_{variable}.png")
+    out_path = os.path.join(dir, f"forecasts_vs_targets_w_diff_sample_{sample_idx}_{variable}{"changes" if not states else ""}.png")
 
     plt.savefig(out_path, bbox_inches="tight")
     plt.close()
@@ -243,7 +259,7 @@ def plot_residuals_with_truth(
     residual_true : torch.Tensor
         Residual error computed from true changes
     name : str
-        Name of the residual (e.g. 'Geostrophic wind', 'QGPV')
+        Short name of the residual (e.g. 'gw', 'qgpv' or 'plan')
     sample_idx : int
         Sample index for file naming
     show_difference : bool
@@ -251,6 +267,7 @@ def plot_residuals_with_truth(
     dir : Path
         Output directory
     """
+    res_name, res_number, res_unit = RES_NAMES[name]
 
     residual_pred = residual_pred.detach().cpu().numpy()
     residual_true = residual_true.detach().cpu().numpy()
@@ -260,15 +277,20 @@ def plot_residuals_with_truth(
 
     nrows = 3 if show_difference else 2
 
-    fig = plt.figure(figsize=(10, 3 if show_difference else 2.2), constrained_layout=True)
+    fig = plt.figure(figsize=(8, 2.4 if show_difference else 1.6), constrained_layout=True)
+
+    fig.set_constrained_layout_pads(
+        w_pad=0.00,
+        h_pad=0.00,
+        wspace=0.01,
+        hspace=0.00,
+    )
 
     gs = fig.add_gridspec(
         nrows=nrows,
         ncols=2,
         width_ratios=[40, 1],
         height_ratios=[1] * nrows,
-        hspace=0.25,
-        wspace=0.05,
     )
 
     ax1 = fig.add_subplot(gs[0, 0])
@@ -290,7 +312,7 @@ def plot_residuals_with_truth(
         vmax=vmax,
         aspect="auto",
     )
-    ax1.set_title(f"Forecast residual |ℛ(ẋ₀)|")
+    ax1.set_title( rf"{res_name} residual on forecast $\mathcal{{R}}_{{\mathrm{{{res_number}}}}}(\hat{{\mathbf{{x}}}}_0)$")
 
     # --- True-state residual ---
     im2 = ax2.imshow(
@@ -301,36 +323,38 @@ def plot_residuals_with_truth(
         vmax=vmax,
         aspect="auto",
     )
-    ax2.set_title(f"True-state residual |ℛ(x₀)|")
+    ax2.set_title(rf"{res_name} residual on true state $\mathcal{{R}}_{{\mathrm{{{res_number}}}}}(\mathbf{{x}}_0)$")
 
-    plt.colorbar(im1, cax=cax_top, label=name)
+    plt.colorbar(im1, cax=cax_top, label=res_unit)
 
     # --- Difference (optional) ---
     if show_difference:
-        diff = residual_pred - residual_true
+        diff = np.abs(residual_pred - residual_true)
         im3 = ax3.imshow(
             diff.T,
-            cmap="PuOr",
+            cmap="Oranges",
             extent=EXTENT_SUBSET,
             aspect="auto",
         )
-        ax3.set_title(r"Residual difference $|\mathcal{R}(\hat{x}_0)| - |\mathcal{R}(x_0)|$")
-        plt.colorbar(im3, cax=cax_bot)
+        ax3.set_title(rf"Residual difference $|\mathcal{{R}}_{{\mathrm{{{res_number}}}}}(\hat{{\mathbf{{x}}}}_0) - \mathcal{{R}}_{{\mathrm{{{res_number}}}}}(\mathbf{{x}}_0)|$")
+        plt.colorbar(im3, cax=cax_bot, label=res_unit)
 
         print(
-            f"Max abs residual difference ({name}, sample {sample_idx}): "
+            f"Max abs residual difference ({res_name}, sample {sample_idx}): "
             f"{np.abs(diff).max():.4f}"
         )
 
     for ax in (ax1, ax2) if not show_difference else (ax1, ax2, ax3):
-        ax.set_xticklabels([])
         ax.set_yticks([])
         ax.set_xlim(EXTENT_SUBSET[0], EXTENT_SUBSET[1])
         ax.set_ylim(EXTENT_SUBSET[2], EXTENT_SUBSET[3])
 
+    for ax in (ax1) if not show_difference else (ax1, ax2):
+        ax.set_xticklabels([])
+
     suffix = "with_diff" if show_difference else "no_diff"
     out_path = os.path.join(
-        dir, f"residual_{name.replace(" ", "_")}_{suffix}_{sample_idx}.png"
+        dir, f"residual_{res_name.replace(" ", "_")}_{suffix}_{sample_idx}.png"
     )
 
     plt.savefig(out_path, dpi=200, bbox_inches="tight")

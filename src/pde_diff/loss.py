@@ -126,7 +126,7 @@ class DarcyLoss(PDE_loss):
         trapezoidal_weights *= (1./self.pixels_per_dim)**2 / 4.
         trapezoidal_weights = generalized_image_to_b_xy_c(trapezoidal_weights)
         return trapezoidal_weights
-    
+
     def compute_residual_field(self, x0_pred):
         assert len(x0_pred.shape) == 4, 'Model output must be a tensor shaped as an image (with explicit axes for the spatial dimensions).'
         batch_size, output_dim, pixels_per_dim, pixels_per_dim = x0_pred.shape
@@ -174,7 +174,7 @@ class DarcyLoss(PDE_loss):
     def compute_residual_field_for_plot(self, x0_pred):
         """
         Compute a per-pixel residual field suitable for plotting (like Fig. 3).
-        
+
         Parameters
         ----------
         x0_pred : torch.Tensor
@@ -352,17 +352,24 @@ class VorticityLoss(PDE_loss):
         kappa = self.R / self.c_p
         return (self.R * self.T_0 * kappa) / (p**2)
 
-    def get_original_states(self, x0_previous, x0_change_pred):
+    def get_original_states(self, x0_previous, x0_change_pred, rearrange = True):
         previous_states_unnormalized = (x0_previous * self.std[None, :, None, None]) + self.mean[None, :, None, None]
         current_state_change_unnormalized = (x0_change_pred * self.diff_std[None, :, None, None]) + self.diff_mean[None, :, None, None]
-        previous_state = ein.rearrange(previous_states_unnormalized, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
-        current_state_change = ein.rearrange(current_state_change_unnormalized, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
+        if rearrange:
+            previous_state = ein.rearrange(previous_states_unnormalized, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
+            current_state_change = ein.rearrange(current_state_change_unnormalized, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
+        else:
+            previous_state = previous_states_unnormalized
+            current_state_change = current_state_change_unnormalized
         return previous_state, current_state_change+previous_state
+
+    def get_normalized_states(self, x0):
+        return (x0 - self.mean[None, :, None, None])/ self.std[None, :, None, None]
 
     def compute_residual_geostrophic_wind(self, x0_previous, x0_change_pred, normalize=True):
         """
         Residual of Holton eq. 6.58
-        
+
         :param self: Description
         :param x0_previous: Description
         :param x0_change_pred: Description
@@ -383,7 +390,7 @@ class VorticityLoss(PDE_loss):
     def compute_residual_planetary_vorticity(self, x0_previous, x0_change_pred, normalize=True):
         """
         Residual of Holton eq. 6.65
-        
+
         :param self: Description
         :param x0_previous: Description
         :param x0_change_pred: Description
