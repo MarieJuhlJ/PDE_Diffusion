@@ -16,7 +16,7 @@ from pde_diff.model import DiffusionModel
 from pde_diff.data.utils import split_dataset
 import pde_diff.loss
 from pde_diff.visualize import visualize_era5_sample
-from pde_diff.visualize_eval import plot_forecast_loss_vs_steps, plot_sample_target_absdiff_stacked, plot_forecasts_vs_targets,plot_residuals_with_truth
+from pde_diff.visualize_eval import *
 
 @hydra.main(version_base=None, config_name="evaluate.yaml", config_path="../../configs")
 def evaluate(cfg: DictConfig):
@@ -48,16 +48,30 @@ def evaluate(cfg: DictConfig):
     os.makedirs(dir, exist_ok=True)
     logger = pl.pytorch.loggers.CSVLogger(dir, name=name)
 
-    trainer = pl.Trainer(accelerator="gpu" if torch.cuda.is_available() else "cpu", logger=logger)
-    #results = trainer.test(model, dataloader_test) #TODO: extend to multiple losses
-    #print(f"Test results: {results}")
+    trainer = pl.Trainer(accelerator="cuda" if torch.cuda.is_available() else "cpu", logger=logger)
+    results = trainer.test(model, dataloader_test) #TODO: extend to multiple losses
+    print(f"Test results: {results}")
+    model = model.to("cuda" if torch.cuda.is_available() else "cpu")
+
+
+    # Save samples
+    dir_sample=os.path.join(dir,name,f"sample_{0}_forward")
+    os.makedirs(dir_sample, exist_ok=True)
+    conditionals, target_changes = next(iter(dataloader_test))
+    conditionals = conditionals.to(model.device)
+    target_changes = target_changes.to(model.device)
+    pred_changes = model.sample_loop(batch_size=1, conditionals=conditionals[None,0])
+    targets_changes_rearranged = ein.rearrange(target_changes, "b (lev var) lon lat -> b lev var lon lat", lev = 3)
+    pred_changes_rearranged = ein.rearrange(pred_changes, "b (lev var) lon lat -> b lev var lon lat", lev = 3)
+
+    for j,var in enumerate(["u","v","pv","t","z"]):
+        plot_sample_target_absdiff_stacked(pred_changes_rearranged[0,1, j, :, :], target=targets_changes_rearranged[0,1, j, :, :], variable=var, sample_idx=f"_T{0}", dir=dir_sample)
 
     if cfg.dataset.name in ["era5"]:
         print("Evaluating forecasting performance...")
         # Creating special test dataset that returns multiple forecast steps
         cfg.dataset.name = "era5_test"
         dataset_test = DatasetRegistry.create(cfg.dataset)
-
         forecasting_losses = evaluate_forecasting(model, dataset_test, steps=cfg.steps, losses=["mse"],dir=os.path.join(dir, name))
         # save losses to csv
         for loss_name, loss_dict in forecasting_losses.items():
@@ -137,12 +151,19 @@ def evaluate_forecasting(model: DiffusionModel, dataset_test: Dataset, steps: in
                             persistent_workers=True,
                             )
     vor_loss = model.loss_fn
+    print(model.device)
+    print(model.loss_fn.std.device)
+
     vor_loss.set_mean_and_std(dataset_test.means, dataset_test.stds, dataset_test.diff_means, dataset_test.diff_stds)
     loss_fns = {"mse": LossRegistry.create(OmegaConf.create({"name":"mse"})) ,
                 "residual": model.loss_fn}
 
     losses = ["mse", "val_era5_sampled_planetary_residual(norm)", "val_era5_sampled_geo_wind_residual(norm)", "val_era5_sampled_qgpv_residual(norm)"]
     loss = {loss: {str(i+1): [] for i in range(steps)} for loss in losses}
+
+    var_names = ["u", "v", "pv", "t", "z"]
+    mse_accum = None     # shape: (n_vars, lon, lat)
+    total_counts = 0
 
     for i, state in enumerate(tqdm(dataloader_test)):
         conditionals, targets, raw_target_states = state
@@ -172,6 +193,16 @@ def evaluate_forecasting(model: DiffusionModel, dataset_test: Dataset, steps: in
                     loss["val_era5_sampled_geo_wind_residual(norm)"][str(k+1)].append(mean_loss_geo_wind[k].item())
                     loss["val_era5_sampled_qgpv_residual(norm)"][str(k+1)].append(mean_loss_qgpv[k].item())
 
+        targets_rearranged = ein.rearrange(targets, "b (lev var) lon lat -> b lev var lon lat", lev = 3)
+        forecasted_changes_rearranged = ein.rearrange(forecasted_changes, "b (lev var) lon lat -> b lev var lon lat", lev = 3)
+        sq_err = (targets_rearranged[0,1] - forecasted_changes_rearranged[0,1])**2
+
+        if mse_accum is None:
+            mse_accum = sq_err.detach().cpu().numpy()
+        else:
+            mse_accum += sq_err.detach().cpu().numpy()
+        total_counts += 1
+
         if i<3:
             dir_sample=os.path.join(dir, f"sample_{i}")
             os.makedirs(dir_sample, exist_ok=True)
@@ -199,7 +230,6 @@ def evaluate_forecasting(model: DiffusionModel, dataset_test: Dataset, steps: in
             un_norm_targets = ein.rearrange(un_norm_targets, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
             un_norm_forecasted_changes = ein.rearrange(un_norm_forecasted_changes, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
 
-
             # un_norm_forecasted_states has shape [steps, levels,vars, lon, lat]
             #un_norm_forecasted_states =loss_fns["residual"].get_original_states(x0_previous=prev_states, x0_change_pred=forecasted_changes)[1]
             #un_norm_target_states =loss_fns["residual"].get_original_states(x0_previous=prev_states_true, x0_change_pred=targets[0])[1]
@@ -224,6 +254,13 @@ def evaluate_forecasting(model: DiffusionModel, dataset_test: Dataset, steps: in
                     states=False)
 
             #save_samples(un_norm_forecasted_states[:,lvl].detach().cpu(), dir=dir_sample, target_states=un_norm_target_states[:,lvl].detach().cpu())
+
+    if mse_accum is not None and total_counts > 0:
+        mse_maps = mse_accum / float(total_counts)  # shape [var, lon, lat]
+        out_dir = Path(dir) / "mse_maps"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for j, var in enumerate(var_names):
+            plot_mse_of_vars(mse_maps[j], out_dir=out_dir, var=var)
     return loss
 
 def get_states(conds, state_changes):

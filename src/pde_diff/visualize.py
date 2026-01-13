@@ -41,7 +41,7 @@ VAR_UNITS = {
     "v": r"$m \cdot s^{-1}$",
     "t": r"$K$",
     "z": r"$m^2 \cdot s^{-2}$",
-    "pv": r"$s^{-1}$",
+    "pv": r"$K \cdot m^2 \cdot kg^{-1} \cdot s^{-1}$",
 }
 
 colors = ["brown", "white", "teal"]  # Transition from blue to white to red
@@ -1104,8 +1104,8 @@ def era5_residuals_plot(model, conditional, model_id, normalize=True):
 if __name__ == "__main__":
     from pde_diff.utils import DatasetRegistry, LossRegistry
     plot_darcy = False
-    plot_data_samples = False
-    plot_era5_training = True
+    plot_data_samples = True
+    plot_era5_training = False
     plot_era5_residual = False
     plot_era5_residual_metrics = False
 
@@ -1219,5 +1219,5 @@ if __name__ == "__main__":
         visualize_era5_sample_full(data_sample_full, variable, level)
 
         # Visualize time series
-        for variable in cfg.atmospheric_features:
-            visualize_time_series(era5_dataset, variable=variable, level=500, coords=(12.568, 55.676))
+        #for variable in cfg.atmospheric_features:
+        #    visualize_time_series(era5_dataset, variable=variable, level=500, coords=(12.568, 55.676))

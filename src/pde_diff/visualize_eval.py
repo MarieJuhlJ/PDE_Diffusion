@@ -3,7 +3,7 @@ import matplotlib.ticker as ticker
 from pde_diff.visualize import *
 
 RES_NAMES = {
-    "qgpv": ("Quasi-geostrophic Potential Vorticity", 1, r"rad $\cdot s^{-1}$"),
+    "qgpv": ("Quasi-geostrophic Potential Vorticity", 1, r"$s^{-1}$"),
     "plan": ("Planetary Vorticity",2, r"$s^{-2}$"),
     "gw": ("Geostrophic Wind", 3,r"$m \cdot s^{-1}$")
 }
@@ -361,3 +361,15 @@ def plot_residuals_with_truth(
     plt.close()
 
     print(f"Saved residual plot to {out_path}")
+
+def plot_mse_of_vars(mse_map, out_dir,var):
+    plt.figure(figsize=(6,3))
+    im = plt.imshow(mse_map.T, origin="lower", cmap="viridis")  # transpose if needed to orient correctly
+    plt.title(f"MSE map — {var} (500 hPa)")
+    plt.xlabel("Longitude")
+    plt.ylabel("Latitude")
+    plt.colorbar(im, fraction=0.046, pad=0.04)
+    out_path = out_dir / f"mse_map_{var}.png"
+    plt.savefig(out_path, bbox_inches="tight", dpi=200)
+    plt.close()
+    print(f"Saved MSE map for {var} to {out_path}")
