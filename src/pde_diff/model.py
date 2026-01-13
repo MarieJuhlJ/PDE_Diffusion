@@ -208,7 +208,7 @@ class DiffusionModel(pl.LightningModule):
             else:
                 model_in = samples
 
-        samples = self.forward(model_in, t)
+            samples = self.forward(model_in, t)
         return samples
 
     def forecast(self, initial_condition, steps):
@@ -217,11 +217,10 @@ class DiffusionModel(pl.LightningModule):
         self.model.eval()
         current_state = initial_condition.to(self.device)
         forecasted_changes = []
-
         for step in range(steps):
             with torch.no_grad():
                 prediction = self.sample_loop(batch_size=current_state.size(0), conditionals=current_state)
-                next_state = current_state[:,-(self.data_dims.input_dims-self.data_dims.output_dims)//2:,:,:].clone()
+                next_state = current_state[:,-(self.data_dims.input_dims-self.data_dims.output_dims)//2:,:,:].clone().to(self.device)
                 next_state[:,:self.data_dims.output_dims, :, :] = self.loss_fn.get_original_states(x0_previous=next_state[:,:self.data_dims.output_dims], x0_change_pred=prediction, rearrange=False)[1]
                 next_state[:,:self.data_dims.output_dims] = self.loss_fn.get_normalized_states(x0=next_state[:,:self.data_dims.output_dims, :, :] )
                 # Update next_state with time information:
