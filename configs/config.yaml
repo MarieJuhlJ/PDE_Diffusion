@@ -20,6 +20,7 @@ model:
   name: unet2d_conditional
   save_best_model: true
   dims: null
+  ckpt_path: null
 
 # Avoid logging to folders
 hydra:

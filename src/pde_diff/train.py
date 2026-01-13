@@ -28,6 +28,21 @@ def train(cfg: DictConfig):
     dataset = DatasetRegistry.create(cfg.dataset)
     model = DiffusionModel(cfg)
 
+    if ckpt_path:=cfg.model.get("ckpt_path", None):
+        # load weight parameters
+        if cfg.get("k_folds", None):
+            cfg.id = "-".join(cfg.id.split("-")[:-1])+ "-retrain" +  f"-{cfg.idx_fold}"
+        else:
+            cfg.id += "-retrain"
+        
+        map_loc = "cuda" if torch.cuda.is_available() else "cpu"
+
+        if cfg.get("k_folds", None):
+            ckpt_path+= f"-{cfg.idx_fold}" +"/best-val_loss.ckpt"
+        else:
+            ckpt_path+="/best-val_loss.ckpt"
+        model = DiffusionModel.load_from_checkpoint(ckpt_path, cfg=cfg)
+
     dataset_train, dataset_val = split_dataset(cfg, dataset)
 
     # To not get out-of-memory error, accumulate the gradients for batch sizes above 32
@@ -50,7 +65,6 @@ def train(cfg: DictConfig):
         os.makedirs("logs", exist_ok=True)
         logger = pl.pytorch.loggers.CSVLogger("logs", name=wandb_name)
     
-
     trainer = pl.Trainer(
         accelerator=acc,
         max_epochs=hp_config.max_epochs,
