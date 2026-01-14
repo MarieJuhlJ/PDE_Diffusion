@@ -1,118 +1,94 @@
-import xarray as xr
-import numpy as np
-from pathlib import Path
+import torch
 from omegaconf import OmegaConf
-from datasets import ERA5Dataset  # Import the ERA5Dataset class
+from tqdm import tqdm
+from torch.utils.data import DataLoader
+from pde_diff.data import datasets
+from pde_diff.utils import DatasetRegistry
 
-# Path to the ERA5 dataset (update this to the actual path)
-ERA5_DATASET_PATH = "data/era5/zarr"
+def _accumulate_sum_sumsq(t, sum_, sumsq_):
+    # t: [B, C, H, W]
+    sum_ += t.sum(dim=(0, 2, 3))
+    sumsq_ += (t * t).sum(dim=(0, 2, 3))
+    return sum_, sumsq_
 
-# List of features to compute means and stds for
-FEATURES = [
-    "v",
-    "u",
-    "pv",
-    "t",
-    "z"
-]
+@torch.no_grad()
+def compute_state_change_mean_std(
+    loader,
+    state_slice=slice(19, 34),
+    device="cpu",
+):
+    state_sum = None
+    state_sumsq = None
+    change_sum = None
+    change_sumsq = None
 
-# Pressure levels to include for 3D variables
-PRESSURE_LEVELS = ["450", "500", "550"]  # Add more levels as needed
+    n_state = 0
+    n_change = 0
 
-# Output dictionaries
-ERA5_MEANS = {}
-ERA5_STD = {}
-ERA5_DIFF_MEAN = {}
-ERA5_DIFF_STD = {}
+    for x, y in tqdm(loader, desc="Computing mean/std", unit="batch"):
+        x = x.to(device=device, dtype=torch.float32)
+        y = y.to(device=device, dtype=torch.float32)
 
-def compute_means_and_stds(dataset, features, pressure_levels):
-    """
-    Compute means, standard deviations, and timestep differences for the specified features.
+        state = x[:, state_slice]  # [B, C_state, H, W]
 
-    Args:
-        dataset (ERA5Dataset): Initialized ERA5Dataset object.
-        features (list): List of features to compute statistics for.
-        pressure_levels (list): List of pressure levels for 3D variables.
+        if y.dim() == 3:
+            y = y.unsqueeze(1)     # ensure [B, C, H, W]
 
-    Returns:
-        dict, dict, dict, dict: Dictionaries containing means, stds, diff means, and diff stds.
-    """
-    means = {}
-    stds = {}
-    diff_means = {}
-    diff_stds = {}
+        B, C_s, H, W = state.shape
+        _, C_c, Hc, Wc = y.shape
+        assert (Hc, Wc) == (H, W)
 
-    for feature in features:
-        if feature in dataset.data:
-            if "isobaricInhPa" in dataset.data[feature].dims:  # 3D variable with pressure levels
-                means[feature] = {}
-                stds[feature] = {}
-                diff_means[feature] = {}
-                diff_stds[feature] = {}
-                for level in pressure_levels:
-                    data = dataset.data[feature].values
-                    means[feature] = np.mean(data, axis=(0,2,3))
-                    stds[feature] = np.std(data,axis=(0,2,3))
+        if state_sum is None:
+            state_sum = torch.zeros(C_s, device=device)
+            state_sumsq = torch.zeros(C_s, device=device)
+            change_sum = torch.zeros(C_c, device=device)
+            change_sumsq = torch.zeros(C_c, device=device)
 
-                    # Compute differences between timesteps
-                    diff_data = np.diff(data, axis=0)
-                    diff_means[feature] = np.mean(diff_data,axis=(0,2,3))
-                    diff_stds[feature] = np.std(diff_data,axis=(0,2,3))
-            else:  # 2D variable
-                data = dataset.data[feature].values
-                means[feature] = np.mean(data)
-                stds[feature] = np.std(data)
+        state_sum, state_sumsq = _accumulate_sum_sumsq(
+            state, state_sum, state_sumsq
+        )
+        change_sum, change_sumsq = _accumulate_sum_sumsq(
+            y, change_sum, change_sumsq
+        )
 
-                # Compute differences between timesteps
-                diff_data = np.diff(data, axis=0)
-                diff_means[feature] = np.mean(diff_data)
-                diff_stds[feature] = np.std(diff_data)
-        else:
-            print(f"Feature '{feature}' not found in the dataset.")
+        n_state += B * H * W
+        n_change += B * H * W
 
-    return means, stds, diff_means, diff_stds
+    state_mean = state_sum / n_state
+    change_mean = change_sum / n_change
 
-# Initialize the ERA5Dataset
-cfg = OmegaConf.create({
-    "path": ERA5_DATASET_PATH,
-    "atmospheric_features": FEATURES,
-    "single_features": [],
-    "static_features": [],
-    "max_year": 2024,
-    "time_step": 1,
-    "normalize": False,
-    "lat_range": [70, 46],
-    "downsample_factor": 3
+    state_var = (state_sumsq / n_state) - state_mean**2
+    change_var = (change_sumsq / n_change) - change_mean**2
 
-})
-dataset = ERA5Dataset(cfg=cfg)
+    state_std = torch.sqrt(torch.clamp(state_var, min=0.0))
+    change_std = torch.sqrt(torch.clamp(change_var, min=0.0))
 
-# Compute means, stds, diff means, and diff stds
-ERA5_MEANS, ERA5_STD, ERA5_DIFF_MEAN, ERA5_DIFF_STD = compute_means_and_stds(
-    dataset, FEATURES, PRESSURE_LEVELS
+    return (
+        state_mean.cpu().tolist(),
+        state_std.cpu().tolist(),
+        change_mean.cpu().tolist(),
+        change_std.cpu().tolist(),
+    )
+
+# ---- usage ----
+cfg = OmegaConf.load("./configs/dataset/era5.yaml")
+cfg.normalize = False
+dataset = DatasetRegistry.create(cfg)
+
+loader = DataLoader(
+    dataset,
+    batch_size=4,
+    shuffle=False,
+    num_workers=0,
 )
 
-# Print the results
-print("ERA5_MEANS =", ERA5_MEANS)
-print("ERA5_STD =", ERA5_STD)
-print("ERA5_DIFF_MEAN =", ERA5_DIFF_MEAN)
-print("ERA5_DIFF_STD =", ERA5_DIFF_STD)
+state_mean, state_std, change_mean, change_std = compute_state_change_mean_std(
+    loader,
+    state_slice=slice(19, 34),
+    device="cuda",  # or "cuda"
+)
 
-# Save the results to the constants file (optional)
-CONSTANTS_FILE = Path("src/pde_diff/data/const_new.py")
-if CONSTANTS_FILE.exists():
-    with open(CONSTANTS_FILE, "r") as f:
-        content = f.readlines()
-
-    with open(CONSTANTS_FILE, "w") as f:
-        for line in content:
-            if "ERA5_MEANS =" in line:
-                f.write(f"ERA5_MEANS = {ERA5_MEANS}\n")
-            elif "ERA5_STD =" in line:
-                f.write(f"ERA5_STD = {ERA5_STD}\n")
-            elif "ERA5_DIFF_MEAN =" in line:
-                f.write(f"ERA5_DIFF_MEAN = {ERA5_DIFF_MEAN}\n")
-            elif "ERA5_DIFF_STD =" in line:
-                f.write(f"ERA5_DIFF_STD = {ERA5_DIFF_STD}\n")
-            else:
-                f.write(line)
+print("STATE_MEAN =", state_mean)
+print("STATE_STD  =", state_std)
+print("CHANGE_MEAN =", change_mean)
+print("CHANGE_STD  =", change_std)

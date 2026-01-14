@@ -404,7 +404,7 @@ class VorticityLoss(PDE_loss):
         wind_geo_v_c = dphi_dx_c / self.f0
         dq_dx_c, dq_dy_c = self.gradient_helper.gradient_horizontal(pv_c)
         wind_nabla_dot = wind_geo_u_c * dq_dx_c + wind_geo_v_c * dq_dy_c
-        dpv_dt = (pv_c - pv_p) / self.dt
+        dpv_dt = (pv_c - pv_p) / (self.dt)
         residual = dpv_dt + wind_nabla_dot
         if normalize:
             residual = self._normalize(residual, 'planetary_vorticity')
@@ -477,9 +477,18 @@ if __name__ == "__main__":
     )
 
     dataset = DatasetRegistry.create(cfg)
+    cfg.normalize = False
+    dataset_no_norm = DatasetRegistry.create(cfg)
 
     loader = DataLoader(
         dataset,
+        batch_size=4,
+        shuffle=False,
+        num_workers=0,
+    )
+
+    loader_no_norm = DataLoader(
+        dataset_no_norm,
         batch_size=4,
         shuffle=False,
         num_workers=0,
@@ -495,6 +504,23 @@ if __name__ == "__main__":
     x, y = batch
     previous = x[:, 19:34]
     current = y
+
+    it_no_norm = iter(loader_no_norm)
+    first_batch_no_norm = next(it_no_norm)
+    batch_no_norm = first_batch_no_norm
+    x_no_norm, y_no_norm = batch_no_norm
+    previous_no_norm = ein.rearrange(x_no_norm[:, 19:34], "b (var lev) lon lat -> b lev var lon lat", lev = 3)
+    current_no_norm = ein.rearrange(y_no_norm, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
+
+    prev_no_normed, current_no_normed = loss.get_original_states(previous, current)
+    change_no_normed = current_no_normed - prev_no_normed
+
+    diff_prev = (prev_no_normed-previous_no_norm).abs()
+    diff_change = (change_no_normed - current_no_norm).abs()
+
+    for i in range(5):
+        print(f"Max abs diff variable {i}: prev {diff_prev[:, :, i].max()}, change {diff_change[:, :, i].max()}")
+        print(f"Relative max abs diff variable {i}: prev {diff_prev[:, :, i].max() / (previous_no_norm[:, :, i].abs().max()+1e-12)}, change {diff_change[:, :, i].max()/(current_no_norm[:, :, i].abs().max()+1e-12)}")
 
     r_era5_pv = loss.compute_residual_planetary_vorticity(previous, current, normalize=False).abs().mean()
     r_era5_qgpv = loss.compute_residual_qgpv(previous, current, normalize=False).abs().mean()
