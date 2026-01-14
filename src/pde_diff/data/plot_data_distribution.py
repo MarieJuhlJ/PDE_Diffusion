@@ -5,7 +5,10 @@ from pde_diff.loss import VorticityLoss
 from tqdm import tqdm
 from omegaconf import OmegaConf
 import matplotlib.pyplot as plt
+import numpy as np
+import os
 
+plt.style.use("pde_diff.custom_style")
 
 def to_tensor(x, device):
     # Handles numpy arrays or already-a-tensor
@@ -35,106 +38,255 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
+    plot_residual_hists = False
+    plot_data_hists = True
+
     cfg = OmegaConf.load("./configs/dataset/era5.yaml")
-    cfg_loss = OmegaConf.create(
-        {
-            "name": "vorticity",
-            "c_residual": 1.0,
-        }
-    )
-
-    loss_fn = LossRegistry.create(cfg_loss)
-    dataset = ERA5Dataset(cfg=cfg)
-    loss_fn.set_mean_and_std(dataset.means, dataset.stds, dataset.diff_means, dataset.diff_stds)
-
-    # Store raw (unnormalized) residual values for histograms
-    hist_data = {
-        "geostrophic_wind": [],
-        "planetary_vorticity": [],
-        "qgpv": [],
-    }
 
     # Cap number of samples to avoid excessive memory usage
     MAX_SAMPLES = 2_000_000
 
-    with torch.no_grad():
+    if plot_residual_hists:
+        cfg_loss = OmegaConf.create(
+            {
+                "name": "vorticity",
+                "c_residual": 1.0,
+            }
+        )
+
+        loss_fn = LossRegistry.create(cfg_loss)
+        dataset = ERA5Dataset(cfg=cfg)
+        loss_fn.set_mean_and_std(dataset.means, dataset.stds, dataset.diff_means, dataset.diff_stds)
+
+        # Store raw (unnormalized) residual values for histograms
+        hist_data = {
+            "geostrophic_wind": [],
+            "planetary_vorticity": [],
+            "qgpv": [],
+        }
+
+        with torch.no_grad():
+            for data in tqdm(dataset, desc="Processing dataset"):
+                prev_np, curr_np = data[0][None, 19:34], data[1][None, :]
+
+                prev = to_tensor(prev_np, device)
+                curr = to_tensor(curr_np, device)
+
+                # Compute residuals (NOT normalized)
+                r_gw = loss_fn.compute_residual_geostrophic_wind(prev, curr, normalize=False)
+                r_pv = loss_fn.compute_residual_planetary_vorticity(prev, curr, normalize=False)
+                r_qg = loss_fn.compute_residual_qgpv(prev, curr, normalize=False)
+
+                append_hist(r_gw, hist_data["geostrophic_wind"], MAX_SAMPLES)
+                append_hist(r_pv, hist_data["planetary_vorticity"], MAX_SAMPLES)
+                append_hist(r_qg, hist_data["qgpv"], MAX_SAMPLES)
+
+                del prev, curr, r_gw, r_pv, r_qg
+
+        # --- Plot 3 histograms side-by-side (counts, not normalized) ---
+        fig, axes = plt.subplots(1, 3, figsize=(15, 4), sharey=True)
+
+        plots = [
+            ("qgpv", r"\mathcal{R}_1 QGPV Residual"),
+            ("planetary_vorticity", r"\mathcal{R}_2 Planetary Vorticity Residual"),
+            ("geostrophic_wind", r"\mathcal{R}_3 Geostrophic Wind Residual"),
+        ]
+
+        for ax, (key, title) in zip(axes, plots):
+            data = np.asarray(hist_data[key])
+
+            mean = data.mean()
+            std = data.std()
+
+            # Robust x-limits to avoid extreme tails dominating
+            lo, hi = np.percentile(data, [0.5, 99.5])
+
+            # Histogram
+            ax.hist(
+                data,
+                bins=120,
+                range=(lo, hi),
+                histtype="stepfilled",
+                alpha=0.6,
+                edgecolor="black",
+                linewidth=0.8,
+            )
+
+            # Mean and std lines
+            ax.axvline(mean, linestyle="-", linewidth=2, label="Mean")
+            ax.axvline(mean - std, linestyle="--", linewidth=1.5, label="±1 Std")
+            ax.axvline(mean + std, linestyle="--", linewidth=1.5)
+
+            # Annotation box
+            textstr = (
+                f"Mean = {mean:.3e}\n"
+                f"Std  = {std:.3e}"
+            )
+            ax.text(
+                0.97,
+                0.97,
+                textstr,
+                transform=ax.transAxes,
+                fontsize=10,
+                verticalalignment="top",
+                horizontalalignment="right",
+                bbox=dict(boxstyle="round", facecolor="white", alpha=0.9),
+            )
+
+            ax.set_title(title, fontsize=12)
+            ax.set_xlabel("Residual value")
+            ax.set_xlim(lo, hi)
+
+            ax.grid(True, linestyle=":", alpha=0.6)
+
+        axes[0].set_ylabel("Count")
+
+        plt.tight_layout()
+        plt.savefig("reports/figures/era5_residual_histograms.png", dpi=300)
+        print("Saved histogram figure to reports/figures/era5_residual_histograms.png")
+
+    if plot_data_hists:
+        cfg.normalize = False
+        dataset = ERA5Dataset(cfg)
+
+        vars = ["u","v","pv","t","z"]
+        levels = ["450hPa","500hPa","550hPa"]
+        hist_data = {str(j): {str(k):[] for k,lvl in enumerate(levels)} for j,var in enumerate(vars)}
+
         for data in tqdm(dataset, desc="Processing dataset"):
-            prev_np, curr_np = data[0][None, 19:34], data[1][None, :]
+            state1_np = data[0][None, :19]
 
-            prev = to_tensor(prev_np, device)
-            curr = to_tensor(curr_np, device)
+            state1 = to_tensor(state1_np, device)
 
-            # Compute residuals (NOT normalized)
-            r_gw = loss_fn.compute_residual_geostrophic_wind(prev, curr, normalize=False)
-            r_pv = loss_fn.compute_residual_planetary_vorticity(prev, curr, normalize=False)
-            r_qg = loss_fn.compute_residual_qgpv(prev, curr, normalize=False)
+            for j,var in enumerate(vars):
+                for k,lvl in enumerate(levels):
+                    data_var = state1[0,(j*3+k)].flatten()
+                    append_hist(data_var, hist_data[str(j)][str(k)], MAX_SAMPLES)
 
-            append_hist(r_gw, hist_data["geostrophic_wind"], MAX_SAMPLES)
-            append_hist(r_pv, hist_data["planetary_vorticity"], MAX_SAMPLES)
-            append_hist(r_qg, hist_data["qgpv"], MAX_SAMPLES)
+            del state1, data_var
 
-            del prev, curr, r_gw, r_pv, r_qg
+        # --- Plot 3 histograms side-by-side (counts, not normalized) ---
+        from pde_diff.visualize import VAR_NAMES, VAR_UNITS
+        colors = ["#2A9D8F", "#E76F51", "#343FB8"]
+        for j,var in enumerate(vars):
+            fig, ax = plt.subplots(figsize=(5,4))
+            all_data=np.array([])
+            for k,lvl in enumerate(levels):
+                data = np.asarray(hist_data[str(j)][str(k)])
+                all_data = np.concatenate((all_data,data))
+                # Robust x-limits to avoid extreme tails dominating
 
-    # --- Plot 3 histograms side-by-side (counts, not normalized) ---
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4), sharey=True)
+            lo, hi = np.percentile(all_data, [0.5, 99.5])
+            text_lines = []
+            for k,lvl in enumerate(levels):
 
-    plots = [
-        ("qgpv", r"\mathcal{R}_1 QGPV Residual"),
-        ("planetary_vorticity", r"\mathcal{R}_2 Planetary Vorticity Residual"),
-        ("geostrophic_wind", r"\mathcal{R}_3 Geostrophic Wind Residual"),
-    ]
+                data = np.asarray(hist_data[str(j)][str(k)])
 
-import numpy as np
+                mean = data.mean()
+                std = data.std()
 
-for ax, (key, title) in zip(axes, plots):
-    data = np.asarray(hist_data[key])
+                # Histogram
+                ax.hist(
+                    data,
+                    bins=120,
+                    range=(lo, hi),
+                    histtype="stepfilled",
+                    alpha=0.6,
+                    color=colors[k],
+                    edgecolor="black",
+                    linewidth=0.8,
+                    label=f"{lvl} Mean = {mean:.2e}, Std  = {std:.2e}"
+                )
+                mean = data.mean()
+                std = data.std()
 
-    mean = data.mean()
-    std = data.std()
+                # Mean and std lines
+                ax.axvline(mean, color=colors[k], linestyle="-", linewidth=2)
+                ax.axvline(mean - std, color=colors[k], linestyle="--", linewidth=1.5)
+                ax.axvline(mean + std, color=colors[k], linestyle="--", linewidth=1.5)
 
-    # Robust x-limits to avoid extreme tails dominating
-    lo, hi = np.percentile(data, [0.5, 99.5])
+            ax.set_title(f"Distribution of {VAR_NAMES[var]}", fontsize=12)
+            ax.set_xlabel(f"{VAR_UNITS[var]}")
+            ax.set_xlim(lo, hi)
 
-    # Histogram
-    ax.hist(
-        data,
-        bins=120,
-        range=(lo, hi),
-        histtype="stepfilled",
-        alpha=0.6,
-        edgecolor="black",
-        linewidth=0.8,
-    )
+            ax.grid(True, linestyle=":", alpha=0.6)
 
-    # Mean and std lines
-    ax.axvline(mean, linestyle="-", linewidth=2, label="Mean")
-    ax.axvline(mean - std, linestyle="--", linewidth=1.5, label="±1 Std")
-    ax.axvline(mean + std, linestyle="--", linewidth=1.5)
+            ax.set_ylabel("Count")
 
-    # Annotation box
-    textstr = (
-        f"Mean = {mean:.3e}\n"
-        f"Std  = {std:.3e}"
-    )
-    ax.text(
-        0.97,
-        0.97,
-        textstr,
-        transform=ax.transAxes,
-        fontsize=10,
-        verticalalignment="top",
-        horizontalalignment="right",
-        bbox=dict(boxstyle="round", facecolor="white", alpha=0.9),
-    )
+            ax.legend()
 
-    ax.set_title(title, fontsize=12)
-    ax.set_xlabel("Residual value")
-    ax.set_xlim(lo, hi)
+            plt.tight_layout()
+            dir = "reports/figures/histograms"
+            os.makedirs(dir, exist_ok=True)
+            plot_path =dir+f"/era5_{var}_histograms.png"
+            plt.savefig(plot_path, dpi=300)
+            print(f"Saved histogram figure to {plot_path}")
 
-    ax.grid(True, linestyle=":", alpha=0.6)
 
-axes[0].set_ylabel("Count")
+        hist_data = {str(j): {str(k):[] for k,lvl in enumerate(levels)} for j,var in enumerate(vars)}
 
-plt.tight_layout()
-plt.savefig("reports/figures/era5_residual_histograms.png", dpi=300)
-print("Saved histogram figure to reports/figures/era5_residual_histograms.png")
+        for data in tqdm(dataset, desc="Processing dataset"):
+            change_np = data[1]
+
+            change = to_tensor(change_np, device)
+
+            for j,var in enumerate(vars):
+                for k,lvl in enumerate(levels):
+                    data_var = change[0,(j*3+k)].flatten()
+                    append_hist(data_var, hist_data[str(j)][str(k)], MAX_SAMPLES)
+
+            del change, data_var
+
+        # --- Plot 3 histograms side-by-side (counts, not normalized) ---
+        for j,var in enumerate(vars):
+            fig, ax = plt.subplots(figsize=(5,4))
+            all_data=np.array([])
+            for k,lvl in enumerate(levels):
+                data = np.asarray(hist_data[str(j)][str(k)])
+                all_data = np.concatenate((all_data,data))
+                # Robust x-limits to avoid extreme tails dominating
+
+            lo, hi = np.percentile(all_data, [0.5, 99.5])
+            text_lines = []
+            for k,lvl in enumerate(levels):
+
+                data = np.asarray(hist_data[str(j)][str(k)])
+
+                mean = data.mean()
+                std = data.std()
+
+                # Histogram
+                ax.hist(
+                    data,
+                    bins=120,
+                    range=(lo, hi),
+                    histtype="stepfilled",
+                    alpha=0.6,
+                    color=colors[k],
+                    edgecolor="black",
+                    linewidth=0.8,
+                    label=f"{lvl} Mean = {mean:.3e}, Std  = {std:.2e}"
+                )
+                mean = data.mean()
+                std = data.std()
+
+                # Mean and std lines
+                ax.axvline(mean, color=colors[k], linestyle="-", linewidth=2)
+                ax.axvline(mean - std, color=colors[k], linestyle="--", linewidth=1.5)
+                ax.axvline(mean + std, color=colors[k], linestyle="--", linewidth=1.5)
+
+            ax.set_title(f"Distribution of change of {VAR_NAMES[var]}", fontsize=12)
+            ax.set_xlabel(f"{VAR_UNITS[var]}")
+            ax.set_xlim(lo, hi)
+
+            ax.grid(True, linestyle=":", alpha=0.6)
+
+            ax.set_ylabel("Count")
+            ax.legend()
+
+            plt.tight_layout()
+            dir = "reports/figures/histograms"
+            os.makedirs(dir, exist_ok=True)
+            plot_path =dir+f"/era5_{var}_change_histograms.png"
+            plt.savefig(plot_path, dpi=300)
+            print(f"Saved histogram figure to {plot_path}")
