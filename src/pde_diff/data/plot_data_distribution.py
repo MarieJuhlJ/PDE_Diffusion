@@ -165,11 +165,11 @@ if __name__ == "__main__":
 
             del state1, data_var
 
-        # --- Plot 3 histograms side-by-side (counts, not normalized) ---
+        # --- Plot 5 variable state histograms ---
         from pde_diff.visualize import VAR_NAMES, VAR_UNITS
-        colors = ["#2A9D8F", "#E76F51", "#343FB8"]
+        colors = ["#2A9D8F", "#E76F51", "#1A4DAC"]
         for j,var in enumerate(vars):
-            fig, ax = plt.subplots(figsize=(5,4))
+            fig, ax = plt.subplots(figsize=(4.3,4.3))
             all_data=np.array([])
             for k,lvl in enumerate(levels):
                 data = np.asarray(hist_data[str(j)][str(k)])
@@ -232,14 +232,14 @@ if __name__ == "__main__":
 
             for j,var in enumerate(vars):
                 for k,lvl in enumerate(levels):
-                    data_var = change[0,(j*3+k)].flatten()
+                    data_var = change[(j*3+k)].flatten()
                     append_hist(data_var, hist_data[str(j)][str(k)], MAX_SAMPLES)
 
             del change, data_var
 
-        # --- Plot 3 histograms side-by-side (counts, not normalized) ---
+        # --- Plot 5 change of state histograms  ---
         for j,var in enumerate(vars):
-            fig, ax = plt.subplots(figsize=(5,4))
+            fig, ax = plt.subplots(figsize=(4.3,4.3))
             all_data=np.array([])
             for k,lvl in enumerate(levels):
                 data = np.asarray(hist_data[str(j)][str(k)])
@@ -265,7 +265,7 @@ if __name__ == "__main__":
                     color=colors[k],
                     edgecolor="black",
                     linewidth=0.8,
-                    label=f"{lvl} Mean = {mean:.3e}, Std  = {std:.2e}"
+                    label=f"{lvl} Mean = {mean:.2e}, Std  = {std:.2e}"
                 )
                 mean = data.mean()
                 std = data.std()
