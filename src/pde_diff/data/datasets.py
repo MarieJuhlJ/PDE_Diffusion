@@ -279,7 +279,7 @@ class ERA5Dataset(Dataset):
             raw_state = np.concatenate([raw_state, ds_state_single], axis=0)
 
         # Normalize target residuals
-        raw_state_change = raw_state - raw_inputs[1, : raw_state.shape[1], :, :]
+        raw_state_change = raw_state - raw_inputs[1]
         if self.normalization_on:
             state_change = self._normalize(raw_state_change, self.diff_means, self.diff_stds)
         else:
