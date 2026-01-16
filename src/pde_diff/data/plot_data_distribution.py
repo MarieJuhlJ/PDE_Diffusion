@@ -231,6 +231,10 @@ if __name__ == "__main__":
         levels = ["450hPa","500hPa","550hPa"]
         hist_data = {str(j): {str(k):[] for k,lvl in enumerate(levels)} for j,var in enumerate(vars)}
 
+        from pde_diff.visualize import VAR_NAMES, VAR_UNITS
+        colors = ["#2A9D8F", "#E76F51", "#1A4DAC"]
+
+        
         for data in tqdm(dataset, desc="Processing dataset"):
             state1_np = data[0][None, :19]
 
@@ -244,10 +248,9 @@ if __name__ == "__main__":
             del state1, data_var
 
         # --- Plot 5 variable state histograms ---
-        from pde_diff.visualize import VAR_NAMES, VAR_UNITS
-        colors = ["#2A9D8F", "#E76F51", "#1A4DAC"]
+        
         for j,var in enumerate(vars):
-            fig, ax = plt.subplots(figsize=(4.3,4.3))
+            fig, ax = plt.subplots(figsize=(4.1,4.1))
             all_data=np.array([])
             for k,lvl in enumerate(levels):
                 data = np.asarray(hist_data[str(j)][str(k)])
@@ -300,7 +303,7 @@ if __name__ == "__main__":
             plt.savefig(plot_path, dpi=300)
             print(f"Saved histogram figure to {plot_path}")
 
-
+        
         hist_data = {str(j): {str(k):[] for k,lvl in enumerate(levels)} for j,var in enumerate(vars)}
 
         for data in tqdm(dataset, desc="Processing dataset"):
@@ -314,10 +317,10 @@ if __name__ == "__main__":
                     append_hist(data_var, hist_data[str(j)][str(k)], MAX_SAMPLES)
 
             del change, data_var
-
+        
         # --- Plot 5 change of state histograms  ---
         for j,var in enumerate(vars):
-            fig, ax = plt.subplots(figsize=(4.3,4.3))
+            fig, ax = plt.subplots(figsize=(4.1,4.1))
             all_data=np.array([])
             for k,lvl in enumerate(levels):
                 data = np.asarray(hist_data[str(j)][str(k)])
