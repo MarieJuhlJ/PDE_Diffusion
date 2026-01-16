@@ -1,5 +1,6 @@
 import torch
 from torch.utils.data._utils.collate import default_collate
+import einops as ein
 import numpy as np
 import lightning as pl
 from diffusers import UNet2DModel, UNet2DConditionModel
@@ -124,6 +125,12 @@ class DiffusionModel(pl.LightningModule):
                 if metric_name == "mse":
                     mse = (self.mse(model_out, target) * self.scheduler.p2_loss_weight[steps][:, None, None, None]).mean()
                     self.log("val_mse_(weighted)", mse, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
+                    if metric_name == 'era5_vorticity':
+                        model_out_reshaped = ein.rearrange(model_out, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
+                        target_reshaped = ein.rearrange(target, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
+                        for i in range(5):
+                            mse_var = (self.mse(model_out_reshaped[:,:,i], target_reshaped[:,:,i]) * self.scheduler.p2_loss_weight[steps][:, None, None, None]).mean()
+                            self.log(f"val_mse_var_{i}_(weighted)", mse_var, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
 
                 if metric_name == 'era5_vorticity':
                     assert self.cfg.loss.name == 'vorticity', "era5_vorticity metric can only be used with vorticity loss"
