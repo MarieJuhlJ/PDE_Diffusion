@@ -515,12 +515,13 @@ if __name__ == "__main__":
     prev_no_normed, current_no_normed = loss.get_original_states(previous, current)
     change_no_normed = current_no_normed - prev_no_normed
 
-    diff_prev = (prev_no_normed-previous_no_norm).abs()
-    diff_change = (change_no_normed - current_no_norm).abs()
+    diff_prev = (prev_no_normed-previous_no_norm).abs() # abs diff between denormed and original
+    diff_change = (change_no_normed - current_no_norm).abs() # abs diff between denormed change and original change
 
     for i in range(5):
         print(f"Max abs diff variable {i}: prev {diff_prev[:, :, i].max()}, change {diff_change[:, :, i].max()}")
         print(f"Relative max abs diff variable {i}: prev {diff_prev[:, :, i].max() / (previous_no_norm[:, :, i].abs().max()+1e-12)}, change {diff_change[:, :, i].max()/(current_no_norm[:, :, i].abs().max()+1e-12)}")
+        print(f"2 norm diff variable {i}: prev {torch.norm(diff_prev[:, :, i])}, change {torch.norm(diff_change[:, :, i])}")
 
     r_era5_pv = loss.compute_residual_planetary_vorticity(previous, current, normalize=False).abs().mean()
     r_era5_qgpv = loss.compute_residual_qgpv(previous, current, normalize=False).abs().mean()
