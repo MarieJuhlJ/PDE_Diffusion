@@ -46,7 +46,7 @@ class PDE_loss(nn.Module):
             if w > 0.0:
                 r = self.residual_loss(x0_hat, var, fn)
                 total += r * w
-            total /= self.num_active_residuals
+        total /= self.num_active_residuals
 
         if self.c_data is None:
             total += self.mse(model_out, target).mean()
