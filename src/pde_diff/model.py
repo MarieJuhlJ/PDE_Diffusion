@@ -124,13 +124,7 @@ class DiffusionModel(pl.LightningModule):
             for metric_name in metrics:
                 if metric_name == "mse":
                     mse = (self.mse(model_out, target) * self.scheduler.p2_loss_weight[steps][:, None, None, None]).mean()
-                    self.log("val_mse_(weighted)", mse, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
-                    if metric_name == 'era5_vorticity':
-                        model_out_reshaped = ein.rearrange(model_out, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
-                        target_reshaped = ein.rearrange(target, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
-                        for i in range(5):
-                            mse_var = (self.mse(model_out_reshaped[:,:,i], target_reshaped[:,:,i]) * self.scheduler.p2_loss_weight[steps][:, None, None, None]).mean()
-                            self.log(f"val_mse_var_{i}_(weighted)", mse_var, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
+                    self.log("val_mse_(weighted)", mse, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))                    
 
                 if metric_name == 'era5_vorticity':
                     assert self.cfg.loss.name == 'vorticity', "era5_vorticity metric can only be used with vorticity loss"
@@ -143,6 +137,12 @@ class DiffusionModel(pl.LightningModule):
                     self.log("val_era5_planetary_residual(norm)", residual_planetary, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
                     self.log("val_era5_geo_wind_residual(norm)", residual_geo_wind, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
                     self.log("val_era5_qgpv_residual(norm)", residual_qgpv, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
+
+                    model_out_reshaped = ein.rearrange(model_out, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
+                    target_reshaped = ein.rearrange(target, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
+                    for i in range(5):
+                        mse_var = (self.mse(model_out_reshaped[:,:,i], target_reshaped[:,:,i]) * self.scheduler.p2_loss_weight[steps][:, None, None, None]).mean()
+                        self.log(f"val_mse_var_{i}_(weighted)", mse_var, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
         else:
             metrics = self.cfg.dataset.test_metrics
             for metric_name in metrics:
