@@ -197,14 +197,11 @@ class DiffusionModel(pl.LightningModule):
                     # 2) sample_loop predictions (stochastic)
                     x0_preds_stoch = self.sample_loop(batch_size=16, conditionals=val_conditionals, deterministic=False)
 
-                    # 3) sample_loop deterministic predictions (no sampling noise)
-                    x0_preds_det = self.sample_loop(batch_size=16, conditionals=val_conditionals, deterministic=True)
-
                     # 4) completely random samples (match per-channel mean/std of targets)
                     # create random samples with the same per-channel mean/std as the validation targets
                     chan_mean = val_targets.mean(dim=(0, 2, 3), keepdim=True)  # shape [1, C, 1, 1]
                     chan_std = val_targets.std(dim=(0, 2, 3), unbiased=False, keepdim=True)
-                    x0_random = torch.randn_like(val_targets) * chan_std + chan_mean
+                    x0_random = torch.randn_like(val_targets) #* chan_std + chan_mean
 
                     # x0_prev (previous state slice) used for residual computations
                     x0_prev = val_conditionals[:, 19:34]
@@ -303,7 +300,7 @@ class DiffusionModel(pl.LightningModule):
                                 color=colors[k],
                                 edgecolor="black",
                                 linewidth=0.8,
-                                label=f"{n}: mean={mean:.3e}, std={std:.3e}",
+                                label=f"{n}: mean={mean:.2e}, std={std:.2e}",
                             )
                             ax.axvline(mean, color=colors[k], linestyle="-", linewidth=2)
                             ax.axvline(mean - std, color=colors[k], linestyle="--", linewidth=1.5)
@@ -328,14 +325,12 @@ class DiffusionModel(pl.LightningModule):
                             lo, hi = (0.0, 1.0)
 
                         fig, ax = plt.subplots(figsize=(6, 3))
-                        text_lines = []
                         for k, n in enumerate(names):
                             data = arrays_raw[n]
                             if data.size == 0:
                                 continue
                             mean = data.mean()
                             std = data.std()
-                            text_lines.append(f"{n}: mean={mean:.2e}, std={std:.2e}")
                             ax.hist(
                                 data,
                                 bins=120,
@@ -345,7 +340,7 @@ class DiffusionModel(pl.LightningModule):
                                 color=colors[k],
                                 edgecolor="black",
                                 linewidth=0.8,
-                                label=n,
+                                label=f"{n}: mean={mean:.2e}, std={std:.2e}",
                             )
                             ax.axvline(mean, color=colors[k], linestyle="-", linewidth=2)
                             ax.axvline(mean - std, color=colors[k], linestyle="--", linewidth=1.5)
@@ -356,16 +351,6 @@ class DiffusionModel(pl.LightningModule):
                         ax.set_xlim(lo, hi)
                         ax.grid(True, linestyle=":", alpha=0.6)
                         ax.legend()
-                        ax.text(
-                            0.97,
-                            0.97,
-                            "\n".join(text_lines),
-                            transform=ax.transAxes,
-                            fontsize=9,
-                            verticalalignment="top",
-                            horizontalalignment="right",
-                            bbox=dict(boxstyle="round", facecolor="white", alpha=0.9),
-                        )
                         fig.tight_layout()
                         fraw = out_dir / f"hist_{rname}_raw_epoch_{self.current_epoch if hasattr(self, 'current_epoch') else 'NA'}.png"
                         fig.savefig(fraw, dpi=150)
