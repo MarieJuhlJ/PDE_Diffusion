@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 import yaml
 
-from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.colors import LinearSegmentedColormap, LogNorm
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import matplotlib.font_manager as fm
@@ -66,56 +66,68 @@ train_loss_diff_colors = ("#E9AF11", "#E0BC58")
 val_loss_diff_colors   = ("#2A9D8F", "#9AD1C5")
 
 
-def plot_darcy_samples(model, model_id, out_dir=Path('./reports/figures')):
-    from matplotlib.colors import LogNorm
+def plot_darcy_samples(model_1, model_2, model_id, out_dir=Path("./reports/figures")):
     save_dir = Path(out_dir) / model_id
-    cfg = OmegaConf.create({
-        "c_residual": None
-    })
-    loss = DarcyLoss(cfg)
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    # Generate samples
-    samples = model.sample_loop(batch_size=1)
-    loss_samples = loss.compute_residual_field_for_plot(
-        samples.to('cuda' if torch.cuda.is_available() else 'cpu')
-    )
-    loss_samples = loss_samples.cpu().numpy()
-    samples = samples.cpu().numpy()
+    cfg = OmegaConf.create({"c_residual": None})
+    loss = DarcyLoss(cfg)
 
-    # Set up figure
-    fig, axs = plt.subplots(1, 3, figsize=(12, 4))
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # Plot #1
-    im0 = axs[0].imshow(samples[0, 0], cmap='magma')
-    axs[0].set_title(r'Permeability - $K$')
-    axs[0].axis('off')
-    fig.colorbar(im0, ax=axs[0], fraction=0.046, pad=0.04)
+    def generate(model):
+        samples = model.sample_loop(batch_size=1)
+        loss_samples = loss.compute_residual_field_for_plot(samples.to(device))
 
-    # Plot #2
-    im1 = axs[1].imshow(np.rot90(samples[0, 1], k=3), cmap='magma')
-    axs[1].set_title(r'Pressure - $P$')
-    axs[1].axis('off')
-    fig.colorbar(im1, ax=axs[1], fraction=0.046, pad=0.04)
+        samples = samples.detach().cpu().numpy()
+        loss_samples = loss_samples.detach().cpu().numpy()
+        return samples, loss_samples
 
-    # Plot #3
+    # --- 1) Generate both ---
+    samples1, res1 = generate(model_1)
+    samples2, res2 = generate(model_2)
 
-    im2 = axs[2].imshow(
-        loss_samples[0],
-        cmap='magma',
-        norm=LogNorm()   # ← Log scale here
-    )
+    # --- 2) Build a shared LogNorm for the residual plot (axs[2]) ---
+    # LogNorm requires strictly positive values; clamp zeros/negatives.
+    eps = 1e-12
+    r1 = np.clip(res1[0], eps, None)
+    r2 = np.clip(res2[0], eps, None)
 
-    axs[2].set_title(r'Residual - $\mathcal{R}_{\text{MAE}}$')
-    axs[2].axis('off')
+    shared_vmin = float(min(r1.min(), r2.min()))
+    shared_vmax = float(max(r1.max(), r2.max()))
+    shared_norm = LogNorm(vmin=shared_vmin, vmax=shared_vmax)
 
-    fig.colorbar(im2, ax=axs[2], fraction=0.046, pad=0.04)
+    def plot_one(samples, res, tag):
+        fig, axs = plt.subplots(1, 3, figsize=(12, 4))
 
-    # Save
-    plt.savefig(save_dir / f'samples{PLOT_TYPE}', bbox_inches='tight')
-    plt.close(fig)
+        # Plot #1
+        im0 = axs[0].imshow(samples[0, 0], cmap="magma")
+        axs[0].set_title(r"Permeability - $K$")
+        axs[0].axis("off")
+        fig.colorbar(im0, ax=axs[0], fraction=0.046, pad=0.04)
 
-    print(f"Saved samples to {save_dir / f'samples{PLOT_TYPE}'}")
+        # Plot #2
+        im1 = axs[1].imshow(np.rot90(samples[0, 1], k=3), cmap="magma")
+        axs[1].set_title(r"Pressure - $P$")
+        axs[1].axis("off")
+        fig.colorbar(im1, ax=axs[1], fraction=0.046, pad=0.04)
+
+        # Plot #3 (shared scale!)
+        res_plot = np.clip(res[0], eps, None)
+        breakpoint()
+        im2 = axs[2].imshow(res_plot, cmap="magma", norm=shared_norm)
+        axs[2].set_title(r"Residual - $\mathcal{R}_{\text{MAE}}$")
+        axs[2].axis("off")
+        fig.colorbar(im2, ax=axs[2], fraction=0.046, pad=0.04)
+
+        out_path = save_dir / f"samples_{tag}{PLOT_TYPE}"
+        plt.savefig(out_path, bbox_inches="tight")
+        plt.close(fig)
+        print(f"Saved samples to {out_path}")
+
+    # --- 3) Plot two figures, same residual norm ---
+    plot_one(samples1, res1, tag="model1")
+    plot_one(samples2, res2, tag="model2")
 
 
 def plot_training_metrics(model_id, out_dir=Path("./reports/figures")):
@@ -1104,16 +1116,18 @@ def era5_residuals_plot(model, conditional, model_id, normalize=True):
 if __name__ == "__main__":
     from pde_diff.utils import DatasetRegistry, LossRegistry
     plot_darcy = False
-    plot_data_samples = True
-    plot_era5_training = False
+    plot_data_samples = False
+    plot_era5_training = True
     plot_era5_residual = False
-    plot_era5_residual_metrics = False
+    plot_era5_residual_metrics = True
+    plot_darcy_sample = False
 
     if plot_era5_training:
         # PLOT ERA 5 THINGS:
         # -------------------------------
         model_path = Path('./models')
-        model_ids =  ['era5_cleanhp_50e-baseline','era5_cleanhp_50e-c1e1', 'era5_cleanhp_50e-c1e2', 'era5_cleanhp_50e-c1e3'] #["era5_ext-base"]#['era5_baseline-v2', 'era5_baseline-c1e1', 'era5_baseline-c1e2','era5_baseline-c1e3']
+        #'era5_cleanhp_50e-c1e3'
+        model_ids = ['era5_clean_hp2_50e-baseline', 'era5_clean_hp2_50e-c1e2', 'era5_clean_hp2_50e-c1e3'] #["era5_ext-base"]#['era5_baseline-v2', 'era5_baseline-c1e1', 'era5_baseline-c1e2','era5_baseline-c1e3']
         #plot_and_save_era5(f"logs/era5_baseline-v2-1/version_0/metrics.csv", Path(f"reports/figures/{model_id}"))
 
         plot_cv_val_metrics(
@@ -1145,7 +1159,7 @@ if __name__ == "__main__":
         breakpoint()
     if plot_era5_residual_metrics:
         model_path = Path('./models')
-        model_ids = ['era5_cleanhp_50e-baseline','era5_cleanhp_50e-c1e1', 'era5_cleanhp_50e-c1e2', 'era5_cleanhp_50e-c1e3'] #["era5_ext-base"]#['era5_baseline-v2', 'era5_baseline-c1e1', 'era5_baseline-c1e2','era5_baseline-c1e3']
+        model_ids = ['era5_clean_hp2_50e-baseline', 'era5_clean_hp2_50e-c1e2', 'era5_clean_hp2_50e-c1e3'] #["era5_ext-base"]#['era5_baseline-v2', 'era5_baseline-c1e1', 'era5_baseline-c1e2','era5_baseline-c1e3']
         #plot_and_save_era5(f"logs/era5_baseline-v2-1/version_0/metrics.csv", Path(f"reports/figures/{model_id}"))
 
         plot_cv_residual_metrics_era5(
@@ -1180,6 +1194,18 @@ if __name__ == "__main__":
         diffusion_model = DiffusionModel(cfg)
         diffusion_model.load_model(model_path / model_id / f"best-val_loss-weights.pt")
         diffusion_model = diffusion_model.to('cuda' if torch.cuda.is_available() else 'cpu')
+
+    if plot_darcy_sample:
+        model_path = Path('./models')
+        model_id_1 = 'exp1-aaaaa-1'
+        cfg_1 = OmegaConf.load(model_path / model_id_1 / "config.yaml")
+        model_id_2 = 'exp1-dp'
+        cfg_2 = OmegaConf.load(model_path / model_id_2 / "config.yaml")
+        diffusion_model_1 = DiffusionModel(cfg_1)
+        diffusion_model_1.load_model(model_path / model_id_1 / f"best-val_loss-weights.pt")
+        diffusion_model_2 = DiffusionModel(cfg_2)
+        diffusion_model_2.load_model(model_path / model_id_2 / f"best-val_loss-weights.pt")
+        plot_darcy_samples(diffusion_model_1, diffusion_model_2, model_id_2, Path('./reports/figures') / model_id_2)
 
     if plot_data_samples:
         # Load the dataset configuration

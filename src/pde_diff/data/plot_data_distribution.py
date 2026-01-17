@@ -38,8 +38,8 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
-    plot_residual_hists = False
-    plot_data_hists = True
+    plot_residual_hists = True
+    plot_data_hists = False
 
     cfg = OmegaConf.load("./configs/dataset/era5.yaml")
 
@@ -64,6 +64,11 @@ if __name__ == "__main__":
             "planetary_vorticity": [],
             "qgpv": [],
         }
+        hist_data_noise = {
+            "geostrophic_wind_noise": [],
+            "planetary_vorticity_noise": [],
+            "qgpv_noise": [],
+        }
 
         with torch.no_grad():
             for data in tqdm(dataset, desc="Processing dataset"):
@@ -71,17 +76,28 @@ if __name__ == "__main__":
 
                 prev = to_tensor(prev_np, device)
                 curr = to_tensor(curr_np, device)
+                prev_noise = torch.randn_like(prev)
+                curr_noise = torch.randn_like(curr)
 
                 # Compute residuals (NOT normalized)
                 r_gw = loss_fn.compute_residual_geostrophic_wind(prev, curr, normalize=False)
                 r_pv = loss_fn.compute_residual_planetary_vorticity(prev, curr, normalize=False)
                 r_qg = loss_fn.compute_residual_qgpv(prev, curr, normalize=False)
 
+                # Compute residuals with noise (NOT normalized)
+                r_gw_noise = loss_fn.compute_residual_geostrophic_wind(prev, curr, normalize=False)
+                r_pv_noise = loss_fn.compute_residual_planetary_vorticity(prev, curr, normalize=False)
+                r_qg_noise = loss_fn.compute_residual_qgpv(prev, curr, normalize=False)
+
                 append_hist(r_gw, hist_data["geostrophic_wind"], MAX_SAMPLES)
                 append_hist(r_pv, hist_data["planetary_vorticity"], MAX_SAMPLES)
                 append_hist(r_qg, hist_data["qgpv"], MAX_SAMPLES)
 
-                del prev, curr, r_gw, r_pv, r_qg
+                append_hist(r_gw_noise, hist_data_noise["geostrophic_wind_noise"], MAX_SAMPLES)
+                append_hist(r_pv_noise, hist_data_noise["planetary_vorticity_noise"], MAX_SAMPLES)
+                append_hist(r_qg_noise, hist_data_noise["qgpv_noise"], MAX_SAMPLES)
+
+                del prev, curr, r_gw, r_pv, r_qg, prev_noise, curr_noise, r_gw_noise, r_pv_noise, r_qg_noise
 
         # --- Plot 3 histograms side-by-side (counts, not normalized) ---
         fig, axes = plt.subplots(1, 3, figsize=(15, 4), sharey=True)
@@ -145,6 +161,68 @@ if __name__ == "__main__":
         plt.savefig("reports/figures/era5_residual_histograms.png", dpi=300)
         print("Saved histogram figure to reports/figures/era5_residual_histograms.png")
 
+        # --- Plot 3 histograms side-by-side (counts, not normalized) ---
+        fig, axes = plt.subplots(1, 3, figsize=(15, 4), sharey=True)
+
+        plots = [
+            ("qgpv_noise", r"\mathcal{R}_1 QGPV Residual Noise"),
+            ("planetary_vorticity_noise", r"\mathcal{R}_2 Planetary Vorticity Residual Noise"),
+            ("geostrophic_wind", r"\mathcal{R}_3 Geostrophic Wind Residual Noise"),
+        ]
+
+        for ax, (key, title) in zip(axes, plots):
+            data = np.asarray(hist_data[key])
+
+            mean = data.mean()
+            std = data.std()
+
+            # Robust x-limits to avoid extreme tails dominating
+            lo, hi = np.percentile(data, [0.5, 99.5])
+
+            # Histogram
+            ax.hist(
+                data,
+                bins=120,
+                range=(lo, hi),
+                histtype="stepfilled",
+                alpha=0.6,
+                edgecolor="black",
+                linewidth=0.8,
+            )
+
+            # Mean and std lines
+            ax.axvline(mean, linestyle="-", linewidth=2, label="Mean")
+            ax.axvline(mean - std, linestyle="--", linewidth=1.5, label="±1 Std")
+            ax.axvline(mean + std, linestyle="--", linewidth=1.5)
+
+            # Annotation box
+            textstr = (
+                f"Mean = {mean:.3e}\n"
+                f"Std  = {std:.3e}"
+            )
+            ax.text(
+                0.97,
+                0.97,
+                textstr,
+                transform=ax.transAxes,
+                fontsize=10,
+                verticalalignment="top",
+                horizontalalignment="right",
+                bbox=dict(boxstyle="round", facecolor="white", alpha=0.9),
+            )
+
+            ax.set_title(title, fontsize=12)
+            ax.set_xlabel("Residual value")
+            ax.set_xlim(lo, hi)
+
+            ax.grid(True, linestyle=":", alpha=0.6)
+
+        axes[0].set_ylabel("Count")
+
+        plt.tight_layout()
+        plt.savefig("reports/figures/era5_residual_histograms_noise.png", dpi=300)
+        print("Saved histogram figure to reports/figures/era5_residual_histograms_noise.png")
+
     if plot_data_hists:
         cfg.normalize = False
         dataset = ERA5Dataset(cfg)
@@ -153,6 +231,10 @@ if __name__ == "__main__":
         levels = ["450hPa","500hPa","550hPa"]
         hist_data = {str(j): {str(k):[] for k,lvl in enumerate(levels)} for j,var in enumerate(vars)}
 
+        from pde_diff.visualize import VAR_NAMES, VAR_UNITS
+        colors = ["#2A9D8F", "#E76F51", "#1A4DAC"]
+
+        
         for data in tqdm(dataset, desc="Processing dataset"):
             state1_np = data[0][None, :19]
 
@@ -166,10 +248,9 @@ if __name__ == "__main__":
             del state1, data_var
 
         # --- Plot 5 variable state histograms ---
-        from pde_diff.visualize import VAR_NAMES, VAR_UNITS
-        colors = ["#2A9D8F", "#E76F51", "#1A4DAC"]
+        
         for j,var in enumerate(vars):
-            fig, ax = plt.subplots(figsize=(4.3,4.3))
+            fig, ax = plt.subplots(figsize=(4.1,4.1))
             all_data=np.array([])
             for k,lvl in enumerate(levels):
                 data = np.asarray(hist_data[str(j)][str(k)])
@@ -222,7 +303,7 @@ if __name__ == "__main__":
             plt.savefig(plot_path, dpi=300)
             print(f"Saved histogram figure to {plot_path}")
 
-
+        
         hist_data = {str(j): {str(k):[] for k,lvl in enumerate(levels)} for j,var in enumerate(vars)}
 
         for data in tqdm(dataset, desc="Processing dataset"):
@@ -236,10 +317,10 @@ if __name__ == "__main__":
                     append_hist(data_var, hist_data[str(j)][str(k)], MAX_SAMPLES)
 
             del change, data_var
-
+        
         # --- Plot 5 change of state histograms  ---
         for j,var in enumerate(vars):
-            fig, ax = plt.subplots(figsize=(4.3,4.3))
+            fig, ax = plt.subplots(figsize=(4.1,4.1))
             all_data=np.array([])
             for k,lvl in enumerate(levels):
                 data = np.asarray(hist_data[str(j)][str(k)])
