@@ -41,6 +41,7 @@ def train(cfg: DictConfig):
             ckpt_path+= f"-{cfg.idx_fold}" +"/best-val_loss.ckpt"
         else:
             ckpt_path+="/best-val_loss.ckpt"
+        print(f"Loading model from checkpoint {ckpt_path}")
         model = DiffusionModel.load_from_checkpoint(ckpt_path, cfg=cfg)
 
     dataset_train, dataset_val = split_dataset(cfg, dataset)

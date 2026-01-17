@@ -173,10 +173,10 @@ class ERA5Dataset(Dataset):
                                                                                               self.static_features)
 
     def _normalize(self, data, means, stds):
-        return (data - means[:, None, None]) / (stds[:, None, None])
+        return (data - means[:, None, None]) / (stds[:, None, None] + 1e-4)
 
     def _unnormalize(self, data, means, stds):
-        return data * (stds[:, None, None]) + means[:, None, None]
+        return data * (stds[:, None, None] + 1e-4) + means[:, None, None]
 
     def _sin_cos_emb(self, x):
         return np.sin(2 * np.pi * x), np.cos(2 * np.pi * x)

@@ -1,0 +1,9 @@
+name: era5_clean_hp3_50e
+
+hyperparameters:
+  batch_size: 16
+  max_epochs: 50
+  log_every_n_steps: 10
+  lr: 0.001
+  weight_decay: 0.005
+  dropout: 0.0
