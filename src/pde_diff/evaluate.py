@@ -174,8 +174,9 @@ def evaluate_forecasting(model: DiffusionModel, dataset_test: Dataset, steps: in
         forecasted_changes = model.forecast(conditionals, steps=steps)[0]
         forecasted_states = get_states(conditionals, forecasted_changes)
         target_states = get_states(conditionals,targets)
-        prev_states_true = torch.cat([conditionals[:, 19:34],target_states[:-1]], dim=0)
-        prev_states = torch.cat([conditionals[:, 19:34],forecasted_states[:-1]], dim=0)
+        num_vars = (conditionals.shape[1] - 8) // 6
+        prev_states_true = torch.cat([conditionals[:, num_vars*3+4:-4],target_states[:-1]], dim=0)
+        prev_states = torch.cat([conditionals[:, num_vars*3+4:-4],forecasted_states[:-1]], dim=0)
         for loss_name, loss_fn in loss_fns.items():
             if loss_name=="mse":
                 for k in range(steps):
@@ -265,7 +266,8 @@ def evaluate_forecasting(model: DiffusionModel, dataset_test: Dataset, steps: in
 
 def get_states(conds, state_changes):
     states = []
-    next_state = conds[0,19:34,:,:] + state_changes[0,:,:,:] if conds.shape[1]>15 else conds[0,:,:,:] + state_changes[0,:,:,:]
+    num_vars = (conds.shape[1] - 8) // 6
+    next_state = conds[0,num_vars*3+4:-4,:,:] + state_changes[0,:,:,:] if conds.shape[1]>15 else conds[0,:,:,:] + state_changes[0,:,:,:]
     states.append(next_state.clone())
     for step in range(1, state_changes.shape[0]):
         next_state = next_state + state_changes[step,:,:,:]

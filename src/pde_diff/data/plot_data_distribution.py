@@ -72,7 +72,8 @@ if __name__ == "__main__":
 
         with torch.no_grad():
             for data in tqdm(dataset, desc="Processing dataset"):
-                prev_np, curr_np = data[0][None, 19:34], data[1][None, :]
+                num_vars = (data[0].shape[0] - 8) // 6
+                prev_np, curr_np = data[0][None, num_vars*3+4:-4], data[1][None, :]
 
                 prev = to_tensor(prev_np, device)
                 curr = to_tensor(curr_np, device)

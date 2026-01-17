@@ -1096,9 +1096,10 @@ def era5_residuals_plot(model, conditional, model_id, normalize=True):
     loss_fn = model.loss_fn
     loss_fn.set_mean_and_std(model.means, model.stds, model.diff_means, model.diff_stds)
     model_sample = model.sample_loop(conditionals = conditional)
-    loss_geo_wind = loss_fn.compute_residual_geostrophic_wind(x0_previous=conditional[:, 19:34], x0_change_pred=model_sample, normalize=normalize).abs().mean(1)
-    loss_planetary = loss_fn.compute_residual_planetary_vorticity(x0_previous=conditional[:, 19:34], x0_change_pred=model_sample, normalize=normalize).abs().mean(1)
-    loss_qgpv = loss_fn.compute_residual_qgpv(x0_previous=conditional[:, 19:34], x0_change_pred=model_sample, normalize=normalize).abs()
+    num_vars = (conditional.shape[1] - 8) // 6
+    loss_geo_wind = loss_fn.compute_residual_geostrophic_wind(x0_previous=conditional[:, num_vars*3+4:-4], x0_change_pred=model_sample, normalize=normalize).abs().mean(1)
+    loss_planetary = loss_fn.compute_residual_planetary_vorticity(x0_previous=conditional[:, num_vars*3+4:-4], x0_change_pred=model_sample, normalize=normalize).abs().mean(1)
+    loss_qgpv = loss_fn.compute_residual_qgpv(x0_previous=conditional[:, num_vars*3+4:-4], x0_change_pred=model_sample, normalize=normalize).abs()
     print(f"mean loss geo wind: {loss_geo_wind.mean().item()}")
     print(f"mean loss planetary vorticity: {loss_planetary.mean().item()}")
     print(f"mean loss qgpv: {loss_qgpv.mean().item()}")

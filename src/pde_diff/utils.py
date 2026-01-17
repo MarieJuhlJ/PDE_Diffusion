@@ -191,7 +191,7 @@ class GradientHelper:
             padding=0,
         )
         dx = dx.view(b, lev, lon, lat)
-        return dx / self.grid_distances['dx']
+        return dx / (self.grid_distances['dx'])
 
     def d_in_dy(self, input):
         b, lev, lon, lat = input.shape
@@ -207,7 +207,7 @@ class GradientHelper:
             padding=0,
         )
         dy = dy.view(b, lev, lon, lat)
-        return dy / self.grid_distances['dy']
+        return dy / (self.grid_distances['dy'])
 
     def d2_in_dx2(self, input):
         b, lev, lon, lat = input.shape
