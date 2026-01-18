@@ -471,11 +471,9 @@ def load_model_stats(model_id, smooth_window=1, fold_num=0, log_path="logs", dat
     era5_cols = [
         "val_era5_geo_wind_residual(norm)",
         "val_era5_planetary_residual(norm)",
-        "val_era5_qgpv_residual(norm)",
     ]
 
     sample_cols = {
-        "val_era5_sampled_qgpv_residual(norm)": res1_qgpv_sample,
         "val_era5_sampled_planetary_residual(norm)": res2_pv_sample,
         "val_era5_sampled_geo_wind_residual(norm)": res3_geowind_sample,
     }
@@ -536,7 +534,6 @@ def load_model_stats(model_id, smooth_window=1, fold_num=0, log_path="logs", dat
         "weighted_mse_errors": weighted_mse_errors,
         "train_loss": train_loss,
         "val_loss": val_loss,
-        "res1_qgpv_sample": res1_qgpv_sample,
         "res2_pv_sample": res2_pv_sample,
         "res3_geowind_sample": res3_geowind_sample,
     }
@@ -561,7 +558,6 @@ def load_model_stats(model_id, smooth_window=1, fold_num=0, log_path="logs", dat
     weighted_mse_errors  = moving_average_2d(weighted_mse_errors, smooth_window)
     train_loss           = moving_average_2d(train_loss, smooth_window)
     val_loss             = moving_average_2d(val_loss, smooth_window)
-    res1_qgpv_sample     = moving_average_2d(res1_qgpv_sample, smooth_window)
     res2_pv_sample       = moving_average_2d(res2_pv_sample, smooth_window)
     res3_geowind_sample  = moving_average_2d(res3_geowind_sample, smooth_window)
 
@@ -572,13 +568,12 @@ def load_model_stats(model_id, smooth_window=1, fold_num=0, log_path="logs", dat
     train_loss_mean, train_loss_low, train_loss_high = mean_ci(train_loss)
     val_loss_mean,   val_loss_low,   val_loss_high   = mean_ci(val_loss)
 
-    res1_mean, res1_low, res1_high = mean_ci(res1_qgpv_sample)
     res2_mean, res2_low, res2_high = mean_ci(res2_pv_sample)
     res3_mean, res3_low, res3_high = mean_ci(res3_geowind_sample)
 
-    total_era_res_mean = res1_mean + res2_mean + res3_mean
-    total_era_res_low  = res1_low  + res2_low  + res3_low
-    total_era_res_high = res1_high + res2_high + res3_high
+    total_era_res_mean = res2_mean + res3_mean
+    total_era_res_low  = res2_low  + res3_low
+    total_era_res_high = res2_high + res3_high
 
     # Number of *smoothed* points
     epochs = res_mean.shape[0] if len(res_mean.shape) > 1 else len(res_mean)
@@ -599,7 +594,6 @@ def load_model_stats(model_id, smooth_window=1, fold_num=0, log_path="logs", dat
         "val_loss_high": val_loss_high,
 
         # --- NEW residuals ---
-        "res1_mean": res1_mean, "res1_low": res1_low, "res1_high": res1_high,
         "res2_mean": res2_mean, "res2_low": res2_low, "res2_high": res2_high,
         "res3_mean": res3_mean, "res3_low": res3_low, "res3_high": res3_high,
         "total_era_res_mean": total_era_res_mean,
@@ -1120,7 +1114,7 @@ if __name__ == "__main__":
     plot_data_samples = False
     plot_era5_training = True
     plot_era5_residual = False
-    plot_era5_residual_metrics = True
+    plot_era5_residual_metrics = False
     plot_darcy_sample = False
 
     if plot_era5_training:
@@ -1128,12 +1122,12 @@ if __name__ == "__main__":
         # -------------------------------
         model_path = Path('./models')
         #'era5_cleanhp_50e-c1e3'
-        model_ids = ['era5_clean_hp2_50e-baseline', 'era5_clean_hp2_50e-c1e2', 'era5_clean_hp2_50e-c1e3'] #["era5_ext-base"]#['era5_baseline-v2', 'era5_baseline-c1e1', 'era5_baseline-c1e2','era5_baseline-c1e3']
+        model_ids = ['era5_clean_hp3-baseline_ne', 'era5_clean_hp3-c1e2_ne']
         #plot_and_save_era5(f"logs/era5_baseline-v2-1/version_0/metrics.csv", Path(f"reports/figures/{model_id}"))
 
         plot_cv_val_metrics(
             model_ids=model_ids,
-            fold_num=5,
+            fold_num=None,
             log_path="logs",
             out_dir=f"reports/figures/era5_baseline_comparisons",
             smooth_window=1,

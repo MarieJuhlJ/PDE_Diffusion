@@ -7,12 +7,13 @@ test_metrics: [mse]
 dims:
   x: 480
   y: 32
-  input_dims: 44
-  output_dims: 12
+  input_dims: 53
+  output_dims: 15
 train: true
 atmospheric_features:
   - 'u'
   - 'v'
+  - 'pv'
   - 't'
   - 'z'
 

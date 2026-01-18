@@ -376,8 +376,8 @@ class VorticityLoss(PDE_loss):
         previous, current = self.get_original_states(x0_previous, x0_change_pred)
 
         num_vars = current.shape[2]
-        wind_u_p, wind_v_p, temp_p, geo_p = [previous[:, :, i] for i in range(num_vars)]
-        wind_u_c, wind_v_c, temp_c, geo_c = [current[:, :, i] for i in range(num_vars)]
+        wind_u_p, wind_v_p, _, temp_p, geo_p = [previous[:, :, i] for i in range(num_vars)]
+        wind_u_c, wind_v_c, _, temp_c, geo_c = [current[:, :, i] for i in range(num_vars)]
 
         dphi_dx_c, dphi_dy_c = self.gradient_helper.gradient_horizontal(geo_c)
         wind_geo_u_c = - dphi_dy_c / self.f0
@@ -398,8 +398,8 @@ class VorticityLoss(PDE_loss):
         previous, current = self.get_original_states(x0_previous, x0_change_pred)
 
         num_vars = current.shape[2]
-        wind_u_p, wind_v_p, temp_p, geo_p = [previous[:, :, i] for i in range(num_vars)]
-        wind_u_c, wind_v_c, temp_c, geo_c = [current[:, :, i] for i in range(num_vars)]
+        wind_u_p, wind_v_p, _, temp_p, geo_p = [previous[:, :, i] for i in range(num_vars)]
+        wind_u_c, wind_v_c, _, temp_c, geo_c = [current[:, :, i] for i in range(num_vars)]
 
         q_p, q_c = self.get_q(x0_previous, x0_change_pred)
 
@@ -418,8 +418,8 @@ class VorticityLoss(PDE_loss):
     def get_q(self, x0_previous, x0_change_pred):
         previous, current = self.get_original_states(x0_previous, x0_change_pred)
         num_vars = current.shape[2]
-        wind_u_p, wind_v_p, temp_p, geo_p = [previous[:, :, i] for i in range(num_vars)]
-        wind_u_c, wind_v_c, temp_c, geo_c = [current[:, :, i] for i in range(num_vars)]
+        wind_u_p, wind_v_p, _, temp_p, geo_p = [previous[:, :, i] for i in range(num_vars)]
+        wind_u_c, wind_v_c, _, temp_c, geo_c = [current[:, :, i] for i in range(num_vars)]
         device = x0_change_pred.device
         dtype = x0_change_pred.dtype
         p = torch.tensor(self.p, device=device, dtype=dtype)[None, :, None, None]
