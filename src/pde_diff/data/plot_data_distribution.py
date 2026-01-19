@@ -186,7 +186,7 @@ if __name__ == "__main__":
             col = "#2A9D8F"
             
             # Robust x-limits to avoid extreme tails dominating
-            lo, hi = np.percentile(data, [1, 99.])
+            lo, hi = np.percentile(data, [0.5, 99.5])
             mean = data[(data>lo)&(data<hi)].mean()
             std = data[(data>lo)&(data<hi)].std()
 

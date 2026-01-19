@@ -383,8 +383,11 @@ class VorticityLoss(PDE_loss):
         wind_geo_u_c = - dphi_dy_c / self.f0
         wind_geo_v_c = dphi_dx_c / self.f0
         residual = (wind_geo_u_c - wind_u_c).abs() + (wind_geo_v_c - wind_v_c).abs()
+
         if relative:
-            return ((wind_geo_u_c - wind_u_c)/(wind_u_c+1e-10)).abs(), ((wind_geo_v_c - wind_v_c)/(wind_v_c+1e-10)).abs()
+            wind_ageo_u_c = wind_geo_u_c - wind_u_c
+            wind_ageo_v_c = wind_geo_v_c - wind_v_c
+            return (wind_ageo_u_c.abs())/(wind_ageo_u_c.abs()+wind_geo_u_c.abs()+1e-10), (wind_ageo_v_c.abs())/(wind_ageo_v_c.abs()+wind_geo_v_c.abs()+1e-10)
         if normalize:
             residual = self._normalize(residual, 'geostrophic_wind')
         return residual
