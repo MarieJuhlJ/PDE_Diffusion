@@ -365,7 +365,7 @@ class VorticityLoss(PDE_loss):
     def get_normalized_states(self, x0):
         return (x0 - self.mean[None, :, None, None])/ self.std[None, :, None, None]
 
-    def compute_residual_geostrophic_wind(self, x0_previous, x0_change_pred, normalize=True):
+    def compute_residual_geostrophic_wind(self, x0_previous, x0_change_pred, normalize=True, relative=False):
         """
         Residual of Holton eq. 6.58
 
@@ -383,6 +383,8 @@ class VorticityLoss(PDE_loss):
         wind_geo_u_c = - dphi_dy_c / self.f0
         wind_geo_v_c = dphi_dx_c / self.f0
         residual = (wind_geo_u_c - wind_u_c).abs() + (wind_geo_v_c - wind_v_c).abs()
+        if relative:
+            return ((wind_geo_u_c - wind_u_c)/(wind_u_c+1e-10)).abs(), ((wind_geo_v_c - wind_v_c)/(wind_v_c+1e-10)).abs()
         if normalize:
             residual = self._normalize(residual, 'geostrophic_wind')
         return residual
