@@ -59,12 +59,30 @@ COLOR_BARS = {
 
 # Custom colour palette (different from default Matplotlib cycle)
 diffusion_colors = ("#2A9D8F","#9AD1C5")   # teal and light teal
-pidm_colors      = ("#C7392F","#E76F51","#B8349B") # warm coral   # light orange
-train_loss_pidm_colors = ( "#2781CA", "#0660AA",  "#033B7A" )
-val_loss_pidm_colors   = ("#C7392F","#E76F51","#B8349B")
-train_loss_diff_colors = ("#E9AF11", "#E0BC58")
-val_loss_diff_colors   = ("#2A9D8F", "#9AD1C5")
+pidm_colors = {
+    'c1e1': "#E76F51",
+    'c1e2': "#1A4DAC",
+    'c1e3': "#843284",
+    'c1e2_pv': "#02BFB9",
+    'c1e2_gw': "#D92323",
+}
+train_loss_pidm_colors = {
+    "c1e1": "#B6D43F",
+    "c1e2": "#70F7BF",
+    "c1e3": "#C67102",
+    "c1e2_pv": "#8E4B98",
+    "c1e2_gw": "#4F70BE",
+}
 
+val_loss_pidm_colors = {
+    "c1e1": "#E76F51",
+    "c1e2": "#1A4DAC",
+    "c1e3": "#843284",
+    "c1e2_pv": "#02BFB9",
+    "c1e2_gw": "#D92323",
+}
+train_loss_diff_colors = ("#52EE8E", "#7E61A3")
+val_loss_diff_colors   = ("#2A9D8F", "#9AD1C5")
 
 def plot_darcy_samples(model_1, model_2, model_id, out_dir=Path("./reports/figures")):
     save_dir = Path(out_dir) / model_id
@@ -458,15 +476,24 @@ def moving_average_2d(arr, window):
         lambda m: np.convolve(m, kernel, mode="valid"), axis=1, arr=arr
     )
 
-def load_model_stats(model_id, smooth_window=1, fold_num=0, log_path="logs", data_type="era5"):
+
+def load_model_stats(
+    model_id,
+    smooth_window=1,
+    fold_num=0,
+    log_path="logs",
+    data_type="era5",
+):
     residual_errors = []
     weighted_mse_errors = []
     train_loss = []
     val_loss = []
-    res1_qgpv_sample = []
-    res2_pv_sample = []
-    res3_geowind_sample = []
+    res1_pv_sample = []
+    res2_geowind_sample = []
     steps = None
+
+    # 5 independent lists (one per var)
+    val_mse_var = [[] for _ in range(5)]
 
     era5_cols = [
         "val_era5_geo_wind_residual(norm)",
@@ -474,25 +501,32 @@ def load_model_stats(model_id, smooth_window=1, fold_num=0, log_path="logs", dat
     ]
 
     sample_cols = {
-        "val_era5_sampled_planetary_residual(norm)": res2_pv_sample,
-        "val_era5_sampled_geo_wind_residual(norm)": res3_geowind_sample,
+        "val_era5_sampled_planetary_residual(norm)": res1_pv_sample,
+        "val_era5_sampled_geo_wind_residual(norm)": res2_geowind_sample,
     }
 
     def read_metrics(mid: str) -> pd.DataFrame:
         csv_path = Path(log_path) / mid / "version_0" / "metrics.csv"
         return (
             pd.read_csv(csv_path)
-            .apply(pd.to_numeric)
+            .apply(pd.to_numeric, errors="coerce")
             .dropna(subset=["step"])
             .sort_values("step")
         )
 
     def append_if(df: pd.DataFrame, col: str, target: list):
         if col in df.columns:
-            target.append(df[col].dropna().values)
+            vals = df[col].dropna().values
+            if len(vals) > 0:
+                target.append(vals)
 
-    model_ids = [model_id] if fold_num is None else [f"{model_id}-{f}" for f in range(1, fold_num + 1)]
+    model_ids = (
+        [model_id]
+        if fold_num is None
+        else [f"{model_id}-{f}" for f in range(1, fold_num + 1)]
+    )
 
+    # ------------------- Read + collect per-fold arrays -------------------
     for mid in model_ids:
         df = read_metrics(mid)
 
@@ -500,7 +534,9 @@ def load_model_stats(model_id, smooth_window=1, fold_num=0, log_path="logs", dat
 
         # residual_errors: ERA5 sum if ALL exist; else Darcy if exists; else nothing
         if all(c in df.columns for c in era5_cols):
-            residual_errors.append(df[era5_cols].dropna(how="any").sum(axis=1).values)
+            tmp = df[era5_cols].dropna(how="any").sum(axis=1).values
+            if len(tmp) > 0:
+                residual_errors.append(tmp)
         else:
             append_if(df, "val_darcy_residual", residual_errors)
 
@@ -508,76 +544,89 @@ def load_model_stats(model_id, smooth_window=1, fold_num=0, log_path="logs", dat
         for col, target in sample_cols.items():
             append_if(df, col, target)
 
-        # always-collected series (assumes these columns exist)
-        weighted_mse_errors.append(df["val_mse_(weighted)"].dropna().values)
-        train_loss.append(df["train_loss"].dropna().values)
-        val_loss.append(df["val_loss"].dropna().values)
+        # always-collected series (append only if present; avoids KeyError)
+        append_if(df, "val_mse_(weighted)", weighted_mse_errors)
+        append_if(df, "train_loss", train_loss)
+        append_if(df, "val_loss", val_loss)
 
-    def trim_stack(arrs):
-        """List[np.ndarray] -> (min_len, np.ndarray[fold, time])"""
-        if not arrs:  # keep behavior predictable if list is empty
-            return 0, np.empty((0, 0))
-        m = min(len(a) for a in arrs)
-        return m, np.array([a[:m] for a in arrs])
+        # val_mse_var_0..4 (weighted)
+        for i in range(5):
+            col = f"val_mse_var_{i}_(weighted)"
+            append_if(df, col, val_mse_var[i])
 
+    # ------------------- Trim everything to the shortest length -------------------
+    series_lists = {
+        "residual_errors": residual_errors,
+        "weighted_mse_errors": weighted_mse_errors,
+        "train_loss": train_loss,
+        "val_loss": val_loss,
+        "res1_pv_sample": res1_pv_sample,
+        "res2_geowind_sample": res2_geowind_sample,
+    }
+    for i in range(5):
+        series_lists[f"val_mse_var_{i}"] = val_mse_var[i]
+
+    nonempty = [lst for lst in series_lists.values() if len(lst) > 0]
+    min_length = min((len(arr) for lst in nonempty for arr in lst), default=0)
+
+    def to_2d(lst):
+        if not lst:
+            return np.empty((0, min_length))
+        return np.array([a[:min_length] for a in lst])
+
+    residual_errors      = to_2d(residual_errors)
+    weighted_mse_errors  = to_2d(weighted_mse_errors)
+    train_loss           = to_2d(train_loss)
+    val_loss             = to_2d(val_loss)
+    res1_pv_sample       = to_2d(res1_pv_sample)
+    res2_geowind_sample  = to_2d(res2_geowind_sample)
+    val_mse_var_2d       = [to_2d(val_mse_var[i]) for i in range(5)]
+
+    # ------------------- Smooth over time -------------------
+    residual_errors      = moving_average_2d(residual_errors, smooth_window)
+    weighted_mse_errors  = moving_average_2d(weighted_mse_errors, smooth_window)
+    train_loss           = moving_average_2d(train_loss, smooth_window)
+    val_loss             = moving_average_2d(val_loss, smooth_window)
+    res1_pv_sample       = moving_average_2d(res1_pv_sample, smooth_window)
+    res2_geowind_sample  = moving_average_2d(res2_geowind_sample, smooth_window)
+    val_mse_var_2d       = [moving_average_2d(x, smooth_window) for x in val_mse_var_2d]
+
+    # ------------------- Means + 95% CI -------------------
     def mean_ci(x2d):
         """np.ndarray[fold, time] -> (mean, low, high) with 95% CI"""
+        if x2d.size == 0:
+            # keep shapes sensible
+            return np.array([]), np.array([]), np.array([])
         n = x2d.shape[0]
         mean = x2d.mean(axis=0)
         std = x2d.std(axis=0)
         half = 1.96 * std / np.sqrt(n) if n else np.zeros_like(mean)
         return mean, mean - half, mean + half
 
-    # ---- Trim everything to the shortest length across ALL tracked arrays ----
-    series_lists = {
-        "residual_errors": residual_errors,
-        "weighted_mse_errors": weighted_mse_errors,
-        "train_loss": train_loss,
-        "val_loss": val_loss,
-        "res2_pv_sample": res2_pv_sample,
-        "res3_geowind_sample": res3_geowind_sample,
-    }
-
-    # only consider non-empty lists when computing global min length
-    nonempty = [lst for lst in series_lists.values() if len(lst) > 0]
-    min_length = min(len(arr) for lst in nonempty for arr in lst) if nonempty else 0
-
-    def to_2d(lst):
-        return np.array([a[:min_length] for a in lst]) if lst else np.empty((0, min_length))
-
-    residual_errors      = to_2d(residual_errors)
-    weighted_mse_errors  = to_2d(weighted_mse_errors)
-    train_loss           = to_2d(train_loss)
-    val_loss             = to_2d(val_loss)
-    res1_qgpv_sample     = to_2d(res1_qgpv_sample)
-    res2_pv_sample       = to_2d(res2_pv_sample)
-    res3_geowind_sample  = to_2d(res3_geowind_sample)
-
-    # ---- Smooth over time ----
-    residual_errors      = moving_average_2d(residual_errors, smooth_window)
-    weighted_mse_errors  = moving_average_2d(weighted_mse_errors, smooth_window)
-    train_loss           = moving_average_2d(train_loss, smooth_window)
-    val_loss             = moving_average_2d(val_loss, smooth_window)
-    res2_pv_sample       = moving_average_2d(res2_pv_sample, smooth_window)
-    res3_geowind_sample  = moving_average_2d(res3_geowind_sample, smooth_window)
-
-    # ---- Means + 95% CI ----
     res_mean, res_low, res_high = mean_ci(residual_errors)
     mse_mean, mse_low, mse_high = mean_ci(weighted_mse_errors)
 
     train_loss_mean, train_loss_low, train_loss_high = mean_ci(train_loss)
     val_loss_mean,   val_loss_low,   val_loss_high   = mean_ci(val_loss)
 
-    res2_mean, res2_low, res2_high = mean_ci(res2_pv_sample)
-    res3_mean, res3_low, res3_high = mean_ci(res3_geowind_sample)
+    res1_mean, res1_low, res1_high = mean_ci(res1_pv_sample)
+    res2_mean, res2_low, res2_high = mean_ci(res2_geowind_sample)
 
-    total_era_res_mean = res2_mean + res3_mean
-    total_era_res_low  = res2_low  + res3_low
-    total_era_res_high = res2_high + res3_high
+    total_era_res_mean = res1_mean + res2_mean
+    total_era_res_low  = res1_low  + res2_low
+    total_era_res_high = res1_high + res2_high
 
-    # Number of *smoothed* points
-    epochs = res_mean.shape[0] if len(res_mean.shape) > 1 else len(res_mean)
-    # TODO: This is actually epochs which makes the plots wrong, it is number of smoothed points
+    val_mse_var_mean = []
+    val_mse_var_low = []
+    val_mse_var_high = []
+    for i in range(5):
+        m, lo, hi = mean_ci(val_mse_var_2d[i])
+        val_mse_var_mean.append(m)
+        val_mse_var_low.append(lo)
+        val_mse_var_high.append(hi)
+
+    # Number of *smoothed* points (time axis length)
+    epochs = len(res_mean)
 
     return {
         "epochs": epochs,
@@ -593,32 +642,145 @@ def load_model_stats(model_id, smooth_window=1, fold_num=0, log_path="logs", dat
         "val_loss_low": val_loss_low,
         "val_loss_high": val_loss_high,
 
-        # --- NEW residuals ---
+        # sampled residuals + totals
+        "res1_mean": res1_mean, "res1_low": res1_low, "res1_high": res1_high,
         "res2_mean": res2_mean, "res2_low": res2_low, "res2_high": res2_high,
-        "res3_mean": res3_mean, "res3_low": res3_low, "res3_high": res3_high,
         "total_era_res_mean": total_era_res_mean,
         "total_era_res_low": total_era_res_low,
         "total_era_res_high": total_era_res_high,
+
+        # --- NEW: per-variable val_mse_var stats (lists of 5 arrays) ---
+        "val_mse_var_mean": val_mse_var_mean,
+        "val_mse_var_low": val_mse_var_low,
+        "val_mse_var_high": val_mse_var_high,
     }
 
+def fill_in_ax(ax, x, stats, error_type, epochs, color, name, num=None, alpha=0.3):
+    # pick series (optionally indexed by num)
+    if num is None:
+        mean = stats[f"{error_type}_mean"]
+        low  = stats[f"{error_type}_low"]
+        high = stats[f"{error_type}_high"]
+    else:
+        mean = stats[f"{error_type}_mean"][num]
+        low  = stats[f"{error_type}_low"][num]
+        high = stats[f"{error_type}_high"][num]
 
-def fill_in_ax(ax, x, stats, error_type, epochs, color, name):
-        # Diffusion
-    ax.plot(x, stats[f"{error_type}_mean"][:epochs],
-            label=f"{name} mean",
-            linewidth=2.2,
-            color=color)
-    ax.fill_between(
-        x,
-        stats[f"{error_type}_low"][:epochs],
-        stats[f"{error_type}_high"][:epochs],
-        alpha=0.3,
-        color=color,
-        #label=f"{name} 95% CI",
-    )
+    x_ = x[:epochs]
+    mean_ = mean[:epochs]
+    low_ = low[:epochs]
+    high_ = high[:epochs]
+
+    ax.plot(x_, mean_, label=f"{name} mean", linewidth=2.2, color=color)
+    ax.fill_between(x_, low_, high_, alpha=alpha, color=color)
+
     return ax
 
-def plot_cv_val_metrics(model_ids, fold_num, log_path, out_dir, smooth_window=10, data_type="era5"):
+def plot_cv_individual_val_metrics(
+    model_ids, fold_num, log_path, out_dir,
+    smooth_window=10, data_type="era5", prefix=''
+):
+    """
+    Plot cross-validated validation metrics for one or multiple models.
+    Saves 5 separate plots (one per variable) into a subfolder.
+    """
+    # --- Global styling tweaks ---
+    plt.rcParams.update({
+        "figure.figsize": (13, 5),
+        "axes.grid": True,
+        "grid.alpha": 0.3,
+        "axes.titlesize": 13,
+        "axes.labelsize": 12,
+        "xtick.labelsize": 10,
+        "ytick.labelsize": 10,
+        "legend.fontsize": 10,
+    })
+
+    model_id_to_name = {
+        "c1e1": r"c=1e-1",
+        "c1e2": r"c=1e-2",
+        "c1e3": r"c=1e-3",
+        "c1e2_pv": r"$\mathcal{R}_1$: c=1e-2",
+        "c1e2_gw": r"$\mathcal{R}_2$: c=1e-2",
+    }
+
+    variables_names = [
+        r"Eastward Wind, $u$",
+        r"Northward Wind, $v$",
+        r"Potential Vorticity, $q_{E}$",
+        r"Temperature, $T$",
+        r"Geopotential, $\Phi$",
+    ]
+    variables_mse = [
+        r"u_{0} - \hat{u}",
+        r"v_{0} - \hat{v}",
+        r"q_{E,0} - \hat{q}_E",
+        r"T_{0} - \hat{T}",
+        r"\Phi_{0} - \hat{\Phi}"
+    ]
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Make a folder for these plots
+    models_tag = "_vs_".join(model_ids) if len(model_ids) > 1 else model_ids[0]
+    plots_dir = out_dir / f"{models_tag}_individual_val_metrics"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+
+    # Load stats
+    stats1 = load_model_stats(
+        model_ids[0], smooth_window, fold_num=fold_num,
+        log_path=log_path, data_type=data_type
+    )
+
+    stats2 = []
+    if len(model_ids) > 1:
+        stats2 = [
+            load_model_stats(
+                model_ids[k], smooth_window, fold_num=fold_num,
+                log_path=log_path, data_type=data_type
+            )
+            for k in range(1, len(model_ids))
+        ]
+
+    epochs = min([s["epochs"] for s in [stats1] + stats2]) if stats2 else stats1["epochs"]
+    x = np.arange(epochs)
+
+    # 5 separate plots
+    for var_i in range(5):
+        fig, ax = plt.subplots(figsize=(4.1,4.1))
+
+        fill_in_ax(ax, x, stats1, "val_mse_var", epochs, diffusion_colors[0], "Diffusion", num=var_i)
+
+        if stats2:
+            for m_i, model_id_2 in enumerate(model_ids[1:]):
+                model_name = model_id_2.split("-")[-1].removeprefix(prefix)
+                suffix = model_id_to_name.get(model_name, "")
+                fill_in_ax(
+                    ax, x, stats2[m_i], "val_mse_var", epochs,
+                    pidm_colors[model_name],
+                    f"PIDM-{suffix}",
+                    num=var_i
+                )
+
+        xlabel = f"Epoch" + (f" (smoothed, window={smooth_window})" if smooth_window > 1 else "")
+        ax.set_xlabel(xlabel)
+        ylabel = rf"$\mathbb{{E}}_{{t,\mathbf{{x}}_0}}[\lambda_t \| {variables_mse[var_i]} \|^2]$"
+        ax.set_ylabel(ylabel)
+        ax.set_title(f"Validation wMSE: {variables_names[var_i]}")
+        ax.set_yscale("log")
+        ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
+
+        var_slug = ["u", "v", "qe", "T", "Phi"][var_i]
+        save_path = plots_dir / f"{models_tag}_val_wmse_{var_slug}.png"
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+
+        print(f"Saved: {save_path}")
+
+    print(f"All plots saved in: {plots_dir}")
+
+def plot_cv_val_metrics(model_ids, fold_num, log_path, out_dir, smooth_window=10, data_type="era5", prefix = ''):
     """
     Function to plot cross-validated validation metrics for one or multiple models.
     Args:
@@ -644,7 +806,9 @@ def plot_cv_val_metrics(model_ids, fold_num, log_path, out_dir, smooth_window=10
         "c1e1": r"c=1e-1",
         "c1e2": r"c=1e-2",
         "c1e3": r"c=1e-3",
-    }
+        "c1e2_pv": r"$\mathcal{R}_1$: c=1e-2",
+        "c1e2_gw": r"$\mathcal{R}_2$: c=1e-2",
+    }    
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -663,16 +827,17 @@ def plot_cv_val_metrics(model_ids, fold_num, log_path, out_dir, smooth_window=10
     ax = axes[0]
 
     # fill in the loss curves for diffusion and pidm
-    res_str = "total_era_res" if data_type == "era5" else "res"
-    ax = fill_in_ax(ax, x, stats1, res_str, epochs, diffusion_colors[0], "Diffusion")
+    ax = fill_in_ax(ax, x, stats1, 'res', epochs, diffusion_colors[0], "Diffusion")
     if len(model_ids) > 1:
         for i, model_id_2 in enumerate(model_ids[1:]):
-            suffix = model_id_to_name.get(model_id_2.split('-')[-1], "")
-            ax = fill_in_ax(ax, x, stats2[i], res_str, epochs, pidm_colors[i], f"PIDM-{suffix}")
+            model_name = model_id_2.split('-')[-1].removeprefix(prefix)
+            suffix = model_id_to_name.get(model_name, "")
+            ax = fill_in_ax(ax, x, stats2[i], 'res', epochs, pidm_colors[model_name], f"PIDM-{suffix}")
 
     ax.set_xlabel(f"Epoch{f" (smoothed, window={smooth_window})" if smooth_window>1 else ""}")
-    ax.set_ylabel(r"$\mathcal{R}_{\text{MAE}}(\mathbf{x_0}) \sim p_\theta (\mathbf{x_0})$")
-    ax.set_title("Validation Sample Residual")
+    ax.set_ylabel(r"$\mathcal{R}_1(\hat{x}_0) + \mathcal{R}_2(\hat{x}_0)$")
+    # ax.set_ylabel(r"$\mathcal{R}_{\text{MAE}}(\mathbf{x_0}) \sim p_\theta (\mathbf{x_0})$")
+    ax.set_title(r"Validation of residuals")
     ax.set_yscale("log")
     ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
 
@@ -683,8 +848,9 @@ def plot_cv_val_metrics(model_ids, fold_num, log_path, out_dir, smooth_window=10
     ax = fill_in_ax(ax, x, stats1,"mse", epochs, diffusion_colors[0], "Diffusion")
     if len(model_ids) > 1:
         for i, model_id_2 in enumerate(model_ids[1:]):
-            suffix = model_id_to_name.get(model_id_2.split('-')[-1], "")
-            ax = fill_in_ax(ax, x, stats2[i],"mse", epochs, pidm_colors[i], f"PIDM-{suffix}")
+            model_name = model_id_2.split('-')[-1].removeprefix(prefix)
+            suffix = model_id_to_name.get(model_name, "")
+            ax = fill_in_ax(ax, x, stats2[i], 'mse', epochs, pidm_colors[model_name], f"PIDM-{suffix}")
 
     ax.set_xlabel(f"Epoch{f" (smoothed, window={smooth_window})" if smooth_window>1 else ""}")
     ax.set_ylabel(r"$\mathbb{E}_{t, \mathbf{x_0}}[\lambda_t \|\mathbf{x_0} - \hat{\mathbf{x}}_0\|^2]$")
@@ -699,9 +865,10 @@ def plot_cv_val_metrics(model_ids, fold_num, log_path, out_dir, smooth_window=10
     ax = fill_in_ax(ax, x, stats1,"val_loss", epochs, val_loss_diff_colors[0], "Diffusion Val loss")
     if len(model_ids) > 1:
         for i, model_id_2 in enumerate(model_ids[1:]):
-            suffix = model_id_to_name.get(model_id_2.split('-')[-1], "")
-            ax = fill_in_ax(ax, x, stats2[i],"train_loss", epochs, train_loss_pidm_colors[i], f"PIDM-{suffix} Train loss")
-            ax = fill_in_ax(ax, x, stats2[i],"val_loss", epochs, val_loss_pidm_colors[i], f"PIDM-{suffix} Val loss")
+            model_name = model_id_2.split('-')[-1].removeprefix(prefix)
+            suffix = model_id_to_name.get(model_name, "")
+            ax = fill_in_ax(ax, x, stats2[i],"train_loss", epochs, train_loss_pidm_colors[model_name], f"PIDM-{suffix} Train loss")
+            ax = fill_in_ax(ax, x, stats2[i],"val_loss", epochs, val_loss_pidm_colors[model_name], f"PIDM-{suffix} Val loss")
 
     ax.set_xlabel(f"Epoch{f" (smoothed, window={smooth_window})" if smooth_window>1 else ""}")
     ax.set_ylabel(r"$\mathbb{E}_{t, \mathbf{x_0}}[\lambda_t \|\mathbf{x_0} - \hat{\mathbf{x}}_0\|^2] + \frac{1}{2 \tilde{\Sigma}} || \mathcal{R}(\mathbf{x}_0^*)(\mathbf{x}_t,t)||^2$")
@@ -734,21 +901,15 @@ def plot_and_save_era5(csv_path, out_dir, loss_title="Loss", residual_title="Res
 
     res_df_geo = df.dropna(subset=["val_era5_geo_wind_residual(norm)"])
     res_df_planetary = df.dropna(subset=["val_era5_planetary_residual(norm)"])
-    res_df_qgpv = df.dropna(subset=["val_era5_qgpv_residual(norm)"])
     mse_df = df.dropna(subset=["val_mse_(weighted)"])
-    data_geo_scaled = res_df_geo["val_era5_geo_wind_residual(norm)"] / res_df_geo["val_era5_geo_wind_residual(norm)"][0]
-    data_planetary_scaled = res_df_planetary["val_era5_planetary_residual(norm)"] / res_df_planetary["val_era5_planetary_residual(norm)"][0]
-    data_qgpv_scaled = res_df_qgpv["val_era5_qgpv_residual(norm)"] / res_df_qgpv["val_era5_qgpv_residual(norm)"][0]
 
     # ---- Residual + MSE plot ----
     res_df_geo = df.dropna(subset=["val_era5_geo_wind_residual(norm)"])
     res_df_planetary = df.dropna(subset=["val_era5_planetary_residual(norm)"])
-    res_df_qgpv = df.dropna(subset=["val_era5_qgpv_residual(norm)"])
     mse_df = df.dropna(subset=["val_mse_(weighted)"])
 
     plt.plot(res_df_geo.epoch, res_df_geo["val_era5_geo_wind_residual(norm)"], label="geo_wind_residual (normalized)")
     plt.plot(res_df_planetary.epoch, res_df_planetary["val_era5_planetary_residual(norm)"], label="planetary_residual (normalized)")
-    plt.plot(res_df_qgpv.epoch, res_df_qgpv["val_era5_qgpv_residual(norm)"], label="qgpv_residual (normalized)")
     plt.plot(mse_df.epoch, mse_df["val_mse_(weighted)"], label="mse_weighted")
 
     if log_scale:
@@ -986,7 +1147,7 @@ def darcy_models_summary_latex_table(
 
     return "\n".join(lines)
 
-def plot_cv_residual_metrics_era5(model_ids, fold_num, log_path, out_dir, smooth_window=10):
+def plot_cv_residual_metrics_era5(model_ids, fold_num, log_path, out_dir, smooth_window=10, data_type="era5", prefix = ''):
     """
     Function to plot cross-validated validation metrics for one or multiple models.
     Args:
@@ -1012,7 +1173,9 @@ def plot_cv_residual_metrics_era5(model_ids, fold_num, log_path, out_dir, smooth
         "c1e1": r"c=1e-1",
         "c1e2": r"c=1e-2",
         "c1e3": r"c=1e-3",
-    }
+        "c1e2_pv": r"$\mathcal{R}_1$: c=1e-2",
+        "c1e2_gw": r"$\mathcal{R}_2$: c=1e-2",
+    }    
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1030,31 +1193,32 @@ def plot_cv_residual_metrics_era5(model_ids, fold_num, log_path, out_dir, smooth
     # ---------------- Residual ----------------
     ax = axes[0]
 
-    # fill in the loss curves for diffusion and pidm
-    ax = fill_in_ax(ax, x, stats1, "res1", epochs, diffusion_colors[0], "Diffusion")
+    res_str = "total_era_res" if data_type == "era5" else "res"
+    ax = fill_in_ax(ax, x, stats1, res_str, epochs, diffusion_colors[0], "Diffusion")
     if len(model_ids) > 1:
         for i, model_id_2 in enumerate(model_ids[1:]):
-            suffix = model_id_to_name.get(model_id_2.split('-')[-1], "")
-            ax = fill_in_ax(ax, x, stats2[i], "res1", epochs, pidm_colors[i], f"PIDM-{suffix}")
-        if smooth_window > 1:
-            ax.set_xlabel(f"Epoch (smoothed, window={smooth_window})")
-        ax.set_ylabel(r"$\mathcal{R1}_{\text{MAE}}(\mathbf{x_0}) \sim p_\theta (\mathbf{x_0})$")
-        ax.set_title("Quasi geostrophic planetary vorticity Residual")
-        ax.set_yscale("log")
-        ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
+            model_name = model_id_2.split('-')[-1].removeprefix(prefix)
+            suffix = model_id_to_name.get(model_name, "")
+            ax = fill_in_ax(ax, x, stats2[i], res_str, epochs, pidm_colors[model_name], f"PIDM-{suffix}")
 
+    ax.set_xlabel(f"Epoch{f" (smoothed, window={smooth_window})" if smooth_window>1 else ""}")
+    ax.set_ylabel(r"$\mathcal{R}_{\text{MAE}}(\mathbf{x_0}) \sim p_\theta (\mathbf{x_0})$")
+    ax.set_title("Validation Sample Residual")
+    ax.set_yscale("log")
+    ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
     # ---------------- MSE ----------------
     ax = axes[1]
 
     # fill in the loss curves for diffusion and pidm
-    ax = fill_in_ax(ax, x, stats1,"res2", epochs, diffusion_colors[0], "Diffusion")
+    ax = fill_in_ax(ax, x, stats1,"res1", epochs, diffusion_colors[0], "Diffusion")
     if len(model_ids) > 1:
         for i, model_id_2 in enumerate(model_ids[1:]):
-            suffix = model_id_to_name.get(model_id_2.split('-')[-1], "")
-            ax = fill_in_ax(ax, x, stats2[i],"res2", epochs, pidm_colors[i], f"PIDM-{suffix}")
+            model_name = model_id_2.split('-')[-1].removeprefix(prefix)
+            suffix = model_id_to_name.get(model_name, "")
+            ax = fill_in_ax(ax, x, stats2[i],"res1", epochs, pidm_colors[model_name], f"PIDM-{suffix}")
         if smooth_window > 1:
             ax.set_xlabel(f"Epoch (smoothed, window={smooth_window})")
-        ax.set_ylabel(r"$\mathcal{R2}_{\text{MAE}}(\mathbf{x_0}) \sim p_\theta (\mathbf{x_0})$")
+        ax.set_ylabel(r"$\mathcal{R1}_{\text{MAE}}(\mathbf{x_0}) \sim p_\theta (\mathbf{x_0})$")
         ax.set_title("Planetary Vorticity Residual")
         ax.set_yscale("log")
         ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
@@ -1062,15 +1226,16 @@ def plot_cv_residual_metrics_era5(model_ids, fold_num, log_path, out_dir, smooth
     ax = axes[2]
 
     # Train loss
-    ax = fill_in_ax(ax, x, stats1,"res3", epochs, diffusion_colors[0], "Diffusion")
+    ax = fill_in_ax(ax, x, stats1,"res2", epochs, diffusion_colors[0], "Diffusion")
     if len(model_ids) > 1:
         for i, model_id_2 in enumerate(model_ids[1:]):
-            suffix = model_id_to_name.get(model_id_2.split('-')[-1], "")
-            ax = fill_in_ax(ax, x, stats2[i],"res3", epochs, pidm_colors[i], f"PIDM-{suffix}")
+            model_name = model_id_2.split('-')[-1].removeprefix(prefix)
+            suffix = model_id_to_name.get(model_name, "")
+            ax = fill_in_ax(ax, x, stats2[i],"res2", epochs, pidm_colors[model_name], f"PIDM-{suffix}")
 
     if smooth_window > 1:
         ax.set_xlabel(f"Epoch (smoothed, window={smooth_window})")
-    ax.set_ylabel(r"$\mathcal{R3}_{\text{MAE}}(\mathbf{x_0}) \sim p_\theta (\mathbf{x_0})$")
+    ax.set_ylabel(r"$\mathcal{R2}_{\text{MAE}}(\mathbf{x_0}) \sim p_\theta (\mathbf{x_0})$")
     ax.set_title("Geostrophic Wind Residual")
     ax.set_yscale("log")
     ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
@@ -1093,10 +1258,8 @@ def era5_residuals_plot(model, conditional, model_id, normalize=True):
     num_vars = (conditional.shape[1] - 8) // 6
     loss_geo_wind = loss_fn.compute_residual_geostrophic_wind(x0_previous=conditional[:, num_vars*3+4:-4], x0_change_pred=model_sample, normalize=normalize).abs().mean(1)
     loss_planetary = loss_fn.compute_residual_planetary_vorticity(x0_previous=conditional[:, num_vars*3+4:-4], x0_change_pred=model_sample, normalize=normalize).abs().mean(1)
-    loss_qgpv = loss_fn.compute_residual_qgpv(x0_previous=conditional[:, num_vars*3+4:-4], x0_change_pred=model_sample, normalize=normalize).abs()
     print(f"mean loss geo wind: {loss_geo_wind.mean().item()}")
     print(f"mean loss planetary vorticity: {loss_planetary.mean().item()}")
-    print(f"mean loss qgpv: {loss_qgpv.mean().item()}")
     residual_variables = [
         'qgpv_R1',
         'planetary_vorticity_R2',
@@ -1112,9 +1275,10 @@ if __name__ == "__main__":
     from pde_diff.utils import DatasetRegistry, LossRegistry
     plot_darcy = False
     plot_data_samples = False
-    plot_era5_training = True
+    plot_era5_training = False
     plot_era5_residual = False
     plot_era5_residual_metrics = False
+    plot_era5_individual_var_mse = False
     plot_darcy_sample = False
 
     if plot_era5_training:
@@ -1122,16 +1286,17 @@ if __name__ == "__main__":
         # -------------------------------
         model_path = Path('./models')
         #'era5_cleanhp_50e-c1e3'
-        model_ids = ['era5_clean_hp3-baseline_ne', 'era5_clean_hp3-c1e2_ne']
+        model_ids = ['era5_clean_hp3-mbaseline', 'era5_clean_hp3-ne_c1e1','era5_clean_hp3-ne_c1e2', 'era5_clean_hp3-ne_c1e3']
         #plot_and_save_era5(f"logs/era5_baseline-v2-1/version_0/metrics.csv", Path(f"reports/figures/{model_id}"))
 
         plot_cv_val_metrics(
             model_ids=model_ids,
-            fold_num=None,
+            fold_num=4,
             log_path="logs",
             out_dir=f"reports/figures/era5_baseline_comparisons",
             smooth_window=1,
-            data_type="era5"
+            data_type="era5",
+            prefix="ne_"
         )
         # ---------------------------------------------------
 
@@ -1152,9 +1317,23 @@ if __name__ == "__main__":
 
         era5_residuals_plot(diffusion_model, conditional, model_id, normalize=False)
         breakpoint()
+
+    if plot_era5_individual_var_mse:
+        model_path = Path('./models')
+        model_ids = ['era5_clean_hp3-mbaseline', 'era5_clean_hp3-ne_c1e1','era5_clean_hp3-ne_c1e2', 'era5_clean_hp3-ne_c1e3']
+        #plot_and_save_era5(f"logs/era5_baseline-v2-1/version_0/metrics.csv", Path(f"reports/figures/{model_id}"))
+
+        plot_cv_individual_val_metrics(
+            model_ids=model_ids,
+            fold_num=5,
+            log_path="logs",
+            out_dir=f"reports/figures/era5_baseline_comparisons",
+            smooth_window=1,
+            prefix = 'ne_'
+        )
     if plot_era5_residual_metrics:
         model_path = Path('./models')
-        model_ids = ['era5_clean_hp2_50e-baseline', 'era5_clean_hp2_50e-c1e2', 'era5_clean_hp2_50e-c1e3'] #["era5_ext-base"]#['era5_baseline-v2', 'era5_baseline-c1e1', 'era5_baseline-c1e2','era5_baseline-c1e3']
+        model_ids = ['era5_clean_hp3-mbaseline', 'era5_clean_hp3-ne_c1e1','era5_clean_hp3-ne_c1e2', 'era5_clean_hp3-ne_c1e3']
         #plot_and_save_era5(f"logs/era5_baseline-v2-1/version_0/metrics.csv", Path(f"reports/figures/{model_id}"))
 
         plot_cv_residual_metrics_era5(
@@ -1163,6 +1342,7 @@ if __name__ == "__main__":
             log_path="logs",
             out_dir=f"reports/figures/era5_baseline_comparisons",
             smooth_window=1,
+            prefix = 'ne_'
         )
 
     if plot_darcy:
