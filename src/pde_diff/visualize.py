@@ -1238,7 +1238,7 @@ def plot_cv_residual_metrics_era5(model_ids, fold_num, log_path, out_dir, smooth
     ax.set_ylabel(r"$\mathcal{R2}_{\text{MAE}}(\mathbf{x_0}) \sim p_\theta (\mathbf{x_0})$")
     ax.set_title("Geostrophic Wind Residual")
     ax.set_yscale("log")
-    ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
+    ax.legend(frameon=True, fancybox=True, framealpha=0.9)
 
     # Improve spacing
     fig.tight_layout(rect=[0, 0.0, 1, 0.95])
@@ -1271,6 +1271,267 @@ def era5_residuals_plot(model, conditional, model_id, normalize=True):
         residual = res_loss[0].cpu().numpy()
         visualize_era5_sample(residual, res_var, "500", big_data_sample=None, dir=Path("./reports/figures") / model_id / f"residuals")
 
+def era5_models_summary_latex_table(
+    model_ids,
+    fold_num,
+    log_path,
+    smooth_window=10,
+    caption="ERA5 comparison (best epoch; mean across folds)",
+    label="tab:era5_summary",
+    sig_figs=3,
+    wrap_math=True,
+    resize_to_linewidth=True,
+    model_id_to_header=None,
+):
+    """
+    Build a LaTeX table summarizing ERA5 validation metrics across folds.
+
+    NOTE: QGPV is removed (does not exist anymore).
+    We assume ERA5 residual metrics are:
+      - val_era5_planetary_residual(norm)
+      - val_era5_geo_wind_residual(norm)
+    Total residual is their sum.
+
+    Table rows:
+      - Total residual (best)
+      - R_planetary (best)
+      - R_geo_wind (best)
+      - Weighted MSE (best)
+      - Total residual @ best Weighted MSE
+
+    Highlighting:
+      - Best (min) per row: \\boldsymbol{...}
+      - Second best (min) per row: \\underline{...}
+    """
+    import math
+    import numpy as np
+    import pandas as pd
+    from pathlib import Path
+
+    COL_R_PLAN = "val_era5_planetary_residual(norm)"
+    COL_R_GEO  = "val_era5_geo_wind_residual(norm)"
+    COL_WMSE   = "val_mse_(weighted)"
+
+    required_cols = [COL_R_PLAN, COL_R_GEO, COL_WMSE]
+
+    # ---------- mention of R1/R2/R3 ----------
+    # Since QGPV is gone, we relabel as:
+    #   R1 := planetary residual
+    #   R2 := geo wind residual
+    #   total := R1 + R2
+    ROWS = [
+        ("total_best",  r"Total residual $(\mathcal{R}_1+\mathcal{R}_2)$ (best)", "min"),
+        ("r1_best",     r"$\mathcal{R}_1$ (planetary) (best)",                    "min"),
+        ("r2_best",     r"$\mathcal{R}_2$ (geo wind) (best)",                     "min"),
+        ("wmse_best",   r"Weighted MSE (best)",                                   "min"),
+        ("total_at_wmse", r"Total residual @ best Weighted MSE",                  "min"),
+    ]
+
+    # ---------- helpers ----------
+    def moving_average_2d(arr: np.ndarray, window: int) -> np.ndarray:
+        if window <= 1:
+            return arr
+        kernel = np.ones(window) / window
+        return np.apply_along_axis(lambda m: np.convolve(m, kernel, mode="valid"), axis=1, arr=arr)
+
+    def _read_metric_series(df: pd.DataFrame, col: str) -> np.ndarray:
+        if col not in df.columns:
+            return np.array([], dtype=float)
+        return pd.to_numeric(df[col], errors="coerce").dropna().to_numpy(dtype=float)
+
+    def _stack_and_trim(series_list):
+        lengths = [len(s) for s in series_list if s is not None]
+        if len(lengths) == 0 or min(lengths) == 0:
+            return np.empty((0, 0), dtype=float)
+        L = min(lengths)
+        trimmed = [s[:L] for s in series_list]
+        return np.vstack(trimmed)
+
+    def to_latex_sci(x: float, sig_figs: int = 3) -> str:
+        """LaTeX scientific notation like 1.23\\times 10^{-4} (no e-04)."""
+        if x == 0:
+            return "0"
+        if not math.isfinite(x):
+            return r"\infty" if x > 0 else (r"-\infty" if x < 0 else r"\mathrm{nan}")
+
+        sign = "-" if x < 0 else ""
+        ax = abs(x)
+        exp = int(math.floor(math.log10(ax)))
+        mant = ax / (10 ** exp)
+
+        mant_rounded = round(mant, sig_figs - 1)
+        if mant_rounded >= 10:
+            mant_rounded /= 10
+            exp += 1
+
+        mant_str = f"{mant_rounded:.{max(sig_figs-1,0)}f}".rstrip("0").rstrip(".")
+        if exp == 0:
+            return f"{sign}{mant_str}"
+        if mant_str == "1":
+            return f"{sign}10^{{{exp}}}"
+        return f"{sign}{mant_str}\\times 10^{{{exp}}}"
+
+    def tex_escape(s: str) -> str:
+        return s.replace("_", r"\_")
+
+    def fmt_cell(val: float, style: str = None) -> str:
+        """
+        style: None | "best" | "second"
+        returns math-wrapped cell like $\\boldsymbol{...}$ or $\\underline{...}$
+        """
+        core = to_latex_sci(float(val), sig_figs=sig_figs)
+        if style == "best":
+            core = r"\boldsymbol{" + core + "}"
+        elif style == "second":
+            core = r"\underline{" + core + "}"
+        return f"${core}$" if wrap_math else core
+
+    def read_metrics_csv(run_id: str) -> pd.DataFrame:
+        csv_path = Path(log_path) / run_id / "version_0" / "metrics.csv"
+        if not csv_path.exists():
+            raise FileNotFoundError(f"Missing metrics.csv: {csv_path}")
+        df = pd.read_csv(csv_path)
+        # robust numeric coercion
+        df = df.apply(pd.to_numeric, errors="coerce")
+        if "step" in df.columns:
+            df = df.dropna(subset=["step"]).sort_values("step")
+        return df
+
+    def load_model_mean_series(model_id: str):
+        """
+        Returns dict of mean series (after smoothing) for:
+          - r_plan_mean, r_geo_mean, wmse_mean, total_mean
+        Shapes: [T]
+        """
+        per_col = {c: [] for c in required_cols}
+
+        for fold in range(1, fold_num + 1):
+            run_id = f"{model_id}-{fold}" if fold_num is not None else model_id
+            df = read_metrics_csv(run_id)
+            for c in required_cols:
+                per_col[c].append(_read_metric_series(df, c))
+
+        arr_plan = _stack_and_trim(per_col[COL_R_PLAN])
+        arr_geo  = _stack_and_trim(per_col[COL_R_GEO])
+        arr_wmse = _stack_and_trim(per_col[COL_WMSE])
+
+        if arr_plan.size == 0 or arr_geo.size == 0 or arr_wmse.size == 0:
+            missing = []
+            if arr_plan.size == 0: missing.append(COL_R_PLAN)
+            if arr_geo.size == 0:  missing.append(COL_R_GEO)
+            if arr_wmse.size == 0: missing.append(COL_WMSE)
+            raise ValueError(f"Model '{model_id}' missing/empty columns: {missing}")
+
+        # align across metrics
+        L = min(arr_plan.shape[1], arr_geo.shape[1], arr_wmse.shape[1])
+        arr_plan = arr_plan[:, :L]
+        arr_geo  = arr_geo[:, :L]
+        arr_wmse = arr_wmse[:, :L]
+
+        # smooth
+        arr_plan = moving_average_2d(arr_plan, smooth_window)
+        arr_geo  = moving_average_2d(arr_geo, smooth_window)
+        arr_wmse = moving_average_2d(arr_wmse, smooth_window)
+
+        # means across folds
+        plan_mean = arr_plan.mean(axis=0)
+        geo_mean  = arr_geo.mean(axis=0)
+        wmse_mean = arr_wmse.mean(axis=0)
+        total_mean = plan_mean + geo_mean
+
+        T = min(len(plan_mean), len(geo_mean), len(wmse_mean), len(total_mean))
+        return {
+            "plan_mean": plan_mean[:T],
+            "geo_mean": geo_mean[:T],
+            "wmse_mean": wmse_mean[:T],
+            "total_mean": total_mean[:T],
+            "epochs": T,
+        }
+
+    # ---------- load stats for all models ----------
+    model_series = {mid: load_model_mean_series(mid) for mid in model_ids}
+    common_T = min(model_series[mid]["epochs"] for mid in model_ids)
+
+    # ---------- pick best epoch values per row ----------
+    # values[row_key][mid] = {"val": float, "epoch": int}
+    values = {k: {} for (k, _, _) in ROWS}
+
+    for mid in model_ids:
+        s = model_series[mid]
+        plan = s["plan_mean"][:common_T]
+        geo  = s["geo_mean"][:common_T]
+        wmse = s["wmse_mean"][:common_T]
+        total = s["total_mean"][:common_T]
+
+        i_total = int(np.argmin(total))
+        i_plan  = int(np.argmin(plan))
+        i_geo   = int(np.argmin(geo))
+        i_wmse  = int(np.argmin(wmse))
+
+        values["total_best"][mid] = {"val": float(total[i_total]), "epoch": i_total}
+        values["r1_best"][mid]    = {"val": float(plan[i_plan]),   "epoch": i_plan}
+        values["r2_best"][mid]    = {"val": float(geo[i_geo]),     "epoch": i_geo}
+        values["wmse_best"][mid]  = {"val": float(wmse[i_wmse]),   "epoch": i_wmse}
+        values["total_at_wmse"][mid] = {"val": float(total[i_wmse]), "epoch": i_wmse}
+
+    # ---------- determine best + second-best model per row ----------
+    best_and_second = {}
+    for (row_key, _, direction) in ROWS:
+        items = [(mid, values[row_key][mid]["val"]) for mid in model_ids]
+        items_sorted = sorted(items, key=lambda x: x[1], reverse=(direction == "max"))
+        best_mid = items_sorted[0][0] if len(items_sorted) > 0 else None
+        second_mid = items_sorted[1][0] if len(items_sorted) > 1 else None
+        best_and_second[row_key] = (best_mid, second_mid)
+
+    # ---------- header names ----------
+    if model_id_to_header is None:
+        # default: show escaped model ids
+        headers = {mid: tex_escape(mid) for mid in model_ids}
+    else:
+        # user-supplied pretty names (already LaTeX-ready ideally)
+        headers = {mid: model_id_to_header.get(mid, tex_escape(mid)) for mid in model_ids}
+
+    # ---------- build LaTeX ----------
+    ncols = 1 + len(model_ids)
+    colspec = "l" + "c" * len(model_ids)
+
+    lines = []
+    lines.append(r"\begin{table}[H]")
+    lines.append(r"\centering")
+    lines.append(r"\caption{" + caption + r"}")
+    lines.append(r"\label{" + label + r"}")
+
+    if resize_to_linewidth:
+        lines.append(r"\resizebox{\linewidth}{!}{%")
+
+    lines.append(r"\begin{tabular}{" + colspec + r"}")
+    lines.append(r"\toprule")
+    lines.append("Metric & " + " & ".join(headers[mid] for mid in model_ids) + r" \\")
+    lines.append(r"\midrule")
+
+    for (row_key, row_label, _) in ROWS:
+        best_mid, second_mid = best_and_second[row_key]
+        row_cells = [row_label]
+        for mid in model_ids:
+            style = None
+            if mid == best_mid:
+                style = "best"
+            elif mid == second_mid:
+                style = "second"
+            row_cells.append(fmt_cell(values[row_key][mid]["val"], style=style))
+        lines.append(" & ".join(row_cells) + r" \\")
+
+    lines.append(r"\bottomrule")
+    lines.append(r"\end{tabular}")
+
+    if resize_to_linewidth:
+        lines.append(r"}")  # closes resizebox
+
+    lines.append(r"\end{table}")
+
+    return "\n".join(lines)
+
+
 if __name__ == "__main__":
     from pde_diff.utils import DatasetRegistry, LossRegistry
     plot_darcy = False
@@ -1279,6 +1540,7 @@ if __name__ == "__main__":
     plot_era5_residual = False
     plot_era5_residual_metrics = False
     plot_era5_individual_var_mse = False
+    era5_latex = False
     plot_darcy_sample = False
 
     if plot_era5_training:
@@ -1381,6 +1643,33 @@ if __name__ == "__main__":
         diffusion_model_2 = DiffusionModel(cfg_2)
         diffusion_model_2.load_model(model_path / model_id_2 / f"best-val_loss-weights.pt")
         plot_darcy_samples(diffusion_model_1, diffusion_model_2, model_id_2, Path('./reports/figures') / model_id_2)
+
+    if era5_latex:
+        model_ids = [
+            "era5_clean_hp3-mbaseline",
+            "era5_clean_hp3-ne_c1e1",
+            "era5_clean_hp3-ne_c1e2",
+            "era5_clean_hp3-ne_c1e3",
+        ]
+
+        pretty = {
+            "era5_clean_hp3-mbaseline": r"Baseline",
+            "era5_clean_hp3-ne_c1e1": r"$c=10^{-1}$",
+            "era5_clean_hp3-ne_c1e2": r"$c=10^{-2}$",
+            "era5_clean_hp3-ne_c1e3": r"$c=10^{-3}$",
+            # "era5_clean_hp3-ne_c1e2_pv": r"$\mathcal{R}_1$: $c=10^{-2}$",
+            # "era5_clean_hp3-ne_c1e2_gw": r"$\mathcal{R}_2$: $c=10^{-2}$",
+        }
+
+        latex = era5_models_summary_latex_table(
+            model_ids=model_ids,
+            fold_num=4,
+            log_path="logs",
+            smooth_window=1,
+            model_id_to_header=pretty,
+        )
+        print(latex)
+
 
     if plot_data_samples:
         # Load the dataset configuration
