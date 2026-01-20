@@ -67,11 +67,11 @@ pidm_colors = {
     'c1e2_gw': "#D92323",
 }
 train_loss_pidm_colors = {
-    "c1e1": "#B6D43F",
-    "c1e2": "#70F7BF",
-    "c1e3": "#C67102",
-    "c1e2_pv": "#8E4B98",
-    "c1e2_gw": "#4F70BE",
+    "c1e1": "#FFBE78",
+    "c1e2": "#4E78A0",
+    "c1e3": "#C32275",
+    "c1e2_pv": "#0290BF",
+    "c1e2_gw": "#D97223",
 }
 
 val_loss_pidm_colors = {
@@ -81,8 +81,8 @@ val_loss_pidm_colors = {
     "c1e2_pv": "#02BFB9",
     "c1e2_gw": "#D92323",
 }
-train_loss_diff_colors = ("#52EE8E", "#7E61A3")
-val_loss_diff_colors   = ("#2A9D8F", "#9AD1C5")
+train_loss_diff_colors = ("#32D9B2","#6FBEDB")
+val_loss_diff_colors   = ("#2A9D8F","#9AD1C5")
 
 def plot_darcy_samples(model_1, model_2, model_id, out_dir=Path("./reports/figures")):
     save_dir = Path(out_dir) / model_id
@@ -655,7 +655,7 @@ def load_model_stats(
         "val_mse_var_high": val_mse_var_high,
     }
 
-def fill_in_ax(ax, x, stats, error_type, epochs, color, name, num=None, alpha=0.3):
+def fill_in_ax(ax, x, stats, error_type, epochs, color, name, num=None, alpha=0.3, linestyle='-'):
     # pick series (optionally indexed by num)
     if num is None:
         mean = stats[f"{error_type}_mean"]
@@ -671,7 +671,14 @@ def fill_in_ax(ax, x, stats, error_type, epochs, color, name, num=None, alpha=0.
     low_ = low[:epochs]
     high_ = high[:epochs]
 
-    ax.plot(x_, mean_, label=f"{name} mean", linewidth=2.2, color=color)
+    ax.plot(
+        x_,
+        mean_,
+        label=f"{name} mean",
+        linewidth=2.2,
+        color=color,
+        linestyle=linestyle
+    )
     ax.fill_between(x_, low_, high_, alpha=alpha, color=color)
 
     return ax
@@ -750,7 +757,7 @@ def plot_cv_individual_val_metrics(
     for var_i in range(5):
         fig, ax = plt.subplots(figsize=(4.1,4.1))
 
-        fill_in_ax(ax, x, stats1, "val_mse_var", epochs, diffusion_colors[0], "Diffusion", num=var_i)
+        fill_in_ax(ax, x, stats1, "val_mse_var", epochs, diffusion_colors[0], "DDPM", num=var_i)
 
         if stats2:
             for m_i, model_id_2 in enumerate(model_ids[1:]):
@@ -827,7 +834,7 @@ def plot_cv_val_metrics(model_ids, fold_num, log_path, out_dir, smooth_window=10
     ax = axes[0]
 
     # fill in the loss curves for diffusion and pidm
-    ax = fill_in_ax(ax, x, stats1, 'res', epochs, diffusion_colors[0], "Diffusion")
+    ax = fill_in_ax(ax, x, stats1, 'res', epochs, diffusion_colors[0], "DDPM")
     if len(model_ids) > 1:
         for i, model_id_2 in enumerate(model_ids[1:]):
             model_name = model_id_2.split('-')[-1].removeprefix(prefix)
@@ -845,7 +852,7 @@ def plot_cv_val_metrics(model_ids, fold_num, log_path, out_dir, smooth_window=10
     ax = axes[1]
 
     # fill in the loss curves for diffusion and pidm
-    ax = fill_in_ax(ax, x, stats1,"mse", epochs, diffusion_colors[0], "Diffusion")
+    ax = fill_in_ax(ax, x, stats1,"mse", epochs, diffusion_colors[0], "DDPM")
     if len(model_ids) > 1:
         for i, model_id_2 in enumerate(model_ids[1:]):
             model_name = model_id_2.split('-')[-1].removeprefix(prefix)
@@ -861,13 +868,13 @@ def plot_cv_val_metrics(model_ids, fold_num, log_path, out_dir, smooth_window=10
     ax = axes[2]
 
     # Train loss
-    ax = fill_in_ax(ax, x, stats1,"train_loss", epochs, train_loss_diff_colors[0], "Diffusion Train loss")
-    ax = fill_in_ax(ax, x, stats1,"val_loss", epochs, val_loss_diff_colors[0], "Diffusion Val loss")
+    ax = fill_in_ax(ax, x, stats1,"train_loss", epochs, train_loss_diff_colors[0], "DDPM Train loss", linestyle='--')
+    ax = fill_in_ax(ax, x, stats1,"val_loss", epochs, val_loss_diff_colors[0], "DDPM Val loss")
     if len(model_ids) > 1:
         for i, model_id_2 in enumerate(model_ids[1:]):
             model_name = model_id_2.split('-')[-1].removeprefix(prefix)
             suffix = model_id_to_name.get(model_name, "")
-            ax = fill_in_ax(ax, x, stats2[i],"train_loss", epochs, train_loss_pidm_colors[model_name], f"PIDM-{suffix} Train loss")
+            ax = fill_in_ax(ax, x, stats2[i],"train_loss", epochs, train_loss_pidm_colors[model_name], f"PIDM-{suffix} Train loss", linestyle='--')
             ax = fill_in_ax(ax, x, stats2[i],"val_loss", epochs, val_loss_pidm_colors[model_name], f"PIDM-{suffix} Val loss")
 
     ax.set_xlabel(f"Epoch{f" (smoothed, window={smooth_window})" if smooth_window>1 else ""}")
@@ -986,31 +993,37 @@ def darcy_models_summary_latex_table(
     def tex_escape(s: str) -> str:
         return s.replace("_", r"\_")
 
-    def to_latex_sci(x: float, sig_figs: int = 3) -> str:
-        """Format as LaTeX scientific notation like 1.23\\times 10^{-4} (no e-04)."""
-        if x == 0 or (isinstance(x, float) and (math.isfinite(x) is False)):
-            # handle 0 / inf / nan simply
-            if x == 0:
-                return "0"
-            return r"\mathrm{nan}" if math.isnan(x) else (r"\infty" if x > 0 else r"-\infty")
+    def to_latex_sci(x: float, decimals: int = 2) -> str:
+        """
+        LaTeX scientific notation like 1.23\\times 10^{-4},
+        using a FIXED number of decimals (keeps trailing zeros).
+        """
+        if x == 0:
+            return f"{0:.{decimals}f}" if decimals > 0 else "0"
+
+        if not math.isfinite(x):
+            return r"\infty" if x > 0 else (r"-\infty" if x < 0 else r"\mathrm{nan}")
 
         sign = "-" if x < 0 else ""
         ax = abs(x)
+
         exp = int(math.floor(math.log10(ax)))
         mant = ax / (10 ** exp)
 
-        # round mantissa to sig_figs
-        mant_rounded = round(mant, sig_figs - 1)
+        mant_rounded = round(mant, decimals)
         if mant_rounded >= 10:
             mant_rounded /= 10
             exp += 1
 
-        # render mantissa without trailing zeros
-        mant_str = f"{mant_rounded:.{max(sig_figs-1,0)}f}".rstrip("0").rstrip(".")
+        mant_str = f"{mant_rounded:.{decimals}f}"
+
         if exp == 0:
             return f"{sign}{mant_str}"
-        if mant_str == "1":
+
+        # optional: keep clean 10^k formatting
+        if float(mant_str) == 1.0:
             return f"{sign}10^{{{exp}}}"
+
         return f"{sign}{mant_str}\\times 10^{{{exp}}}"
 
     def fmt_pm(mean: float, half: float) -> str:
@@ -1194,7 +1207,7 @@ def plot_cv_residual_metrics_era5(model_ids, fold_num, log_path, out_dir, smooth
     ax = axes[0]
 
     res_str = "total_era_res" if data_type == "era5" else "res"
-    ax = fill_in_ax(ax, x, stats1, res_str, epochs, diffusion_colors[0], "Diffusion")
+    ax = fill_in_ax(ax, x, stats1, res_str, epochs, diffusion_colors[0], "DDPM")
     if len(model_ids) > 1:
         for i, model_id_2 in enumerate(model_ids[1:]):
             model_name = model_id_2.split('-')[-1].removeprefix(prefix)
@@ -1210,7 +1223,7 @@ def plot_cv_residual_metrics_era5(model_ids, fold_num, log_path, out_dir, smooth
     ax = axes[1]
 
     # fill in the loss curves for diffusion and pidm
-    ax = fill_in_ax(ax, x, stats1,"res1", epochs, diffusion_colors[0], "Diffusion")
+    ax = fill_in_ax(ax, x, stats1,"res1", epochs, diffusion_colors[0], "DDPM")
     if len(model_ids) > 1:
         for i, model_id_2 in enumerate(model_ids[1:]):
             model_name = model_id_2.split('-')[-1].removeprefix(prefix)
@@ -1219,14 +1232,14 @@ def plot_cv_residual_metrics_era5(model_ids, fold_num, log_path, out_dir, smooth
         if smooth_window > 1:
             ax.set_xlabel(f"Epoch (smoothed, window={smooth_window})")
         ax.set_ylabel(r"$\mathcal{R1}_{\text{MAE}}(\mathbf{x_0}) \sim p_\theta (\mathbf{x_0})$")
-        ax.set_title("Planetary Vorticity Residual")
+        ax.set_title("Planetary Vorticity Sample Residual")
         ax.set_yscale("log")
         ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
 
     ax = axes[2]
 
     # Train loss
-    ax = fill_in_ax(ax, x, stats1,"res2", epochs, diffusion_colors[0], "Diffusion")
+    ax = fill_in_ax(ax, x, stats1,"res2", epochs, diffusion_colors[0], "DDPM")
     if len(model_ids) > 1:
         for i, model_id_2 in enumerate(model_ids[1:]):
             model_name = model_id_2.split('-')[-1].removeprefix(prefix)
@@ -1236,7 +1249,7 @@ def plot_cv_residual_metrics_era5(model_ids, fold_num, log_path, out_dir, smooth
     if smooth_window > 1:
         ax.set_xlabel(f"Epoch (smoothed, window={smooth_window})")
     ax.set_ylabel(r"$\mathcal{R2}_{\text{MAE}}(\mathbf{x_0}) \sim p_\theta (\mathbf{x_0})$")
-    ax.set_title("Geostrophic Wind Residual")
+    ax.set_title("Geostrophic Wind Sample Residual")
     ax.set_yscale("log")
     ax.legend(frameon=True, fancybox=True, framealpha=0.9)
 
@@ -1347,44 +1360,50 @@ def era5_models_summary_latex_table(
         trimmed = [s[:L] for s in series_list]
         return np.vstack(trimmed)
 
-    def to_latex_sci(x: float, sig_figs: int = 3) -> str:
-        """LaTeX scientific notation like 1.23\\times 10^{-4} (no e-04)."""
+    def to_latex_sci(x: float, decimals: int = 2) -> str:
+        """
+        LaTeX scientific notation like 1.23\\times 10^{-4},
+        using a FIXED number of decimals (keeps trailing zeros).
+        """
         if x == 0:
-            return "0"
+            return f"{0:.{decimals}f}" if decimals > 0 else "0"
+
         if not math.isfinite(x):
             return r"\infty" if x > 0 else (r"-\infty" if x < 0 else r"\mathrm{nan}")
 
         sign = "-" if x < 0 else ""
         ax = abs(x)
+
         exp = int(math.floor(math.log10(ax)))
         mant = ax / (10 ** exp)
 
-        mant_rounded = round(mant, sig_figs - 1)
+        mant_rounded = round(mant, decimals)
         if mant_rounded >= 10:
             mant_rounded /= 10
             exp += 1
 
-        mant_str = f"{mant_rounded:.{max(sig_figs-1,0)}f}".rstrip("0").rstrip(".")
+        mant_str = f"{mant_rounded:.{decimals}f}"
+
         if exp == 0:
             return f"{sign}{mant_str}"
-        if mant_str == "1":
+
+        # optional: keep clean 10^k formatting
+        if float(mant_str) == 1.0:
             return f"{sign}10^{{{exp}}}"
+
         return f"{sign}{mant_str}\\times 10^{{{exp}}}"
 
     def tex_escape(s: str) -> str:
         return s.replace("_", r"\_")
 
     def fmt_cell(val: float, style: str = None) -> str:
-        """
-        style: None | "best" | "second"
-        returns math-wrapped cell like $\\boldsymbol{...}$ or $\\underline{...}$
-        """
-        core = to_latex_sci(float(val), sig_figs=sig_figs)
+        core = to_latex_sci(float(val), decimals=2)
         if style == "best":
             core = r"\boldsymbol{" + core + "}"
         elif style == "second":
             core = r"\underline{" + core + "}"
         return f"${core}$" if wrap_math else core
+
 
     def read_metrics_csv(run_id: str) -> pd.DataFrame:
         csv_path = Path(log_path) / run_id / "version_0" / "metrics.csv"
@@ -1548,7 +1567,7 @@ if __name__ == "__main__":
         # -------------------------------
         model_path = Path('./models')
         #'era5_cleanhp_50e-c1e3'
-        model_ids = ['era5_clean_hp3-mbaseline', 'era5_clean_hp3-ne_c1e1','era5_clean_hp3-ne_c1e2', 'era5_clean_hp3-ne_c1e3']
+        model_ids = ['era5_clean_hp3-mbaseline', 'era5_clean_hp3-ne_c1e3','era5_clean_hp3-ne_c1e2', 'era5_clean_hp3-ne_c1e1']
         #plot_and_save_era5(f"logs/era5_baseline-v2-1/version_0/metrics.csv", Path(f"reports/figures/{model_id}"))
 
         plot_cv_val_metrics(
@@ -1582,7 +1601,7 @@ if __name__ == "__main__":
 
     if plot_era5_individual_var_mse:
         model_path = Path('./models')
-        model_ids = ['era5_clean_hp3-mbaseline', 'era5_clean_hp3-ne_c1e1','era5_clean_hp3-ne_c1e2', 'era5_clean_hp3-ne_c1e3']
+        model_ids = ['era5_clean_hp3-mbaseline', 'era5_clean_hp3-ne_c1e3','era5_clean_hp3-ne_c1e2', 'era5_clean_hp3-ne_c1e1']
         #plot_and_save_era5(f"logs/era5_baseline-v2-1/version_0/metrics.csv", Path(f"reports/figures/{model_id}"))
 
         plot_cv_individual_val_metrics(
@@ -1595,7 +1614,7 @@ if __name__ == "__main__":
         )
     if plot_era5_residual_metrics:
         model_path = Path('./models')
-        model_ids = ['era5_clean_hp3-mbaseline', 'era5_clean_hp3-ne_c1e1','era5_clean_hp3-ne_c1e2', 'era5_clean_hp3-ne_c1e3']
+        model_ids = ['era5_clean_hp3-mbaseline', 'era5_clean_hp3-ne_c1e3','era5_clean_hp3-ne_c1e2', 'era5_clean_hp3-ne_c1e1']
         #plot_and_save_era5(f"logs/era5_baseline-v2-1/version_0/metrics.csv", Path(f"reports/figures/{model_id}"))
 
         plot_cv_residual_metrics_era5(
@@ -1647,23 +1666,25 @@ if __name__ == "__main__":
     if era5_latex:
         model_ids = [
             "era5_clean_hp3-mbaseline",
-            "era5_clean_hp3-ne_c1e1",
-            "era5_clean_hp3-ne_c1e2",
             "era5_clean_hp3-ne_c1e3",
+            "era5_clean_hp3-ne_c1e2",
+            "era5_clean_hp3-ne_c1e1",
+            # "era5_clean_hp3-c1e2_gw",
+            # "era5_clean_hp3-c1e2_pv",
         ]
 
         pretty = {
             "era5_clean_hp3-mbaseline": r"Baseline",
-            "era5_clean_hp3-ne_c1e1": r"$c=10^{-1}$",
-            "era5_clean_hp3-ne_c1e2": r"$c=10^{-2}$",
             "era5_clean_hp3-ne_c1e3": r"$c=10^{-3}$",
-            # "era5_clean_hp3-ne_c1e2_pv": r"$\mathcal{R}_1$: $c=10^{-2}$",
-            # "era5_clean_hp3-ne_c1e2_gw": r"$\mathcal{R}_2$: $c=10^{-2}$",
+            "era5_clean_hp3-ne_c1e2": r"$c=10^{-2}$",
+            "era5_clean_hp3-ne_c1e1": r"$c=10^{-1}$",
+            # "era5_clean_hp3-c1e2_pv": r"$\mathcal{R}_1$: $c=10^{-2}$",
+            # "era5_clean_hp3-c1e2_gw": r"$\mathcal{R}_2$: $c=10^{-2}$",
         }
 
         latex = era5_models_summary_latex_table(
             model_ids=model_ids,
-            fold_num=4,
+            fold_num=5,
             log_path="logs",
             smooth_window=1,
             model_id_to_header=pretty,
