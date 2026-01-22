@@ -50,13 +50,10 @@ def split_dataset(cfg: DictConfig, dataset: Dataset) -> tuple[Dataset, Dataset]:
             else:
                 raise NotImplementedError(f"Error estimation method {error_est_method} not implemented.")
         else:
-            # Split dataset into train and validation sets
-            val_size = int(len(dataset) * 0.1)
-            train_size = len(dataset) - val_size
-
-            # Offset the train and validation set by one to avoid data leakage in time series datasets (each item contains 3 timesteps)
-            dataset_train = Subset(dataset, range(train_size-1))
-            dataset_val = Subset(dataset, range(train_size+1, len(dataset)))
+            # Use all data
+            dataset_train = dataset
+            dataset_val = None
+            print("Using all training data to train model")
     else:
         if cfg.get("k_folds", None):
             assert cfg.get("idx_fold", None) is not None, "idx_fold must be specified for k-fold cross-validation."
