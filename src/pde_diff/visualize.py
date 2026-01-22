@@ -642,13 +642,20 @@ def load_model_stats(
     }
 
     def read_metrics(mid: str) -> pd.DataFrame:
+        prev_run_exists = False
+        if "retrain" in mid:
+            # if retrain search for prev version, should be remove fold nr and "retrain"
+            prev_mid = "-".join(mid.split("-")[:-2])+"-"+mid.split("-")[-1]
+            prev_df = read_metrics(prev_mid)
+            prev_run_exists = True
         csv_path = Path(log_path) / mid / "version_0" / "metrics.csv"
-        return (
-            pd.read_csv(csv_path)
-            .apply(pd.to_numeric, errors="coerce")
-            .dropna(subset=["step"])
-            .sort_values("step")
-        )
+        df = pd.read_csv(csv_path).apply(pd.to_numeric, errors="coerce").dropna(subset=["step"]).sort_values("step")
+
+        if prev_run_exists:
+            last_epoch = prev_df["epoch"].max()
+            df["epoch"]+=last_epoch
+            return pd.concat([prev_df, df])
+        return df
 
     def append_if(df: pd.DataFrame, col: str, target: list):
         if col in df.columns:
@@ -885,6 +892,8 @@ def plot_cv_individual_val_metrics(
             )
             for k in range(1, len(model_ids))
         ]
+    # In case of model with retraining, remove from name after having loaded the data from all retraining runs.
+    model_ids=[remove_retrain_suffix(model_id) for model_id in model_ids]
 
     epochs = min([s["epochs"] for s in [stats1] + stats2]) if stats2 else stats1["epochs"]
     x = np.arange(epochs)
@@ -923,6 +932,12 @@ def plot_cv_individual_val_metrics(
 
     print(f"All plots saved in: {plots_dir}")
 
+def remove_retrain_suffix(model_id):
+    for i in range(5):
+        if model_id.split('-')[-1]=="retrain":
+            model_id = "-".join(model_id.split('-')[:-1])
+    return model_id
+
 def plot_cv_val_metrics(model_ids, fold_num, log_path, out_dir, smooth_window=10, data_type="era5", prefix = ''):
     """
     Function to plot cross-validated validation metrics for one or multiple models.
@@ -959,6 +974,8 @@ def plot_cv_val_metrics(model_ids, fold_num, log_path, out_dir, smooth_window=10
     stats1 = load_model_stats(model_ids[0], smooth_window, fold_num=fold_num, log_path=log_path, data_type=data_type)
     if len(model_ids) > 1:
         stats2 = [load_model_stats(model_ids[i], smooth_window, fold_num=fold_num, log_path=log_path, data_type=data_type) for i in range(1, len(model_ids))]
+    # In case of model with retraining, remove from name after having loaded the data from all retraining runs.
+    model_ids=[remove_retrain_suffix(model_id) for model_id in model_ids]
 
     epochs = min([stats["epochs"] for stats in [stats1]+stats2]) if len(model_ids) > 1 else stats1["epochs"]
 
@@ -1277,7 +1294,9 @@ def plot_cv_residual_metrics_era5(model_ids, fold_num, log_path, out_dir, smooth
     stats1 = load_model_stats(model_ids[0], smooth_window, fold_num=fold_num, log_path=log_path)
     if len(model_ids) > 1:
         stats2 = [load_model_stats(model_ids[i], smooth_window, fold_num=fold_num, log_path=log_path) for i in range(1, len(model_ids))]
-
+    # In case of model with retraining, remove from name after having loaded the data from all retraining runs.
+    model_ids=[remove_retrain_suffix(model_id) for model_id in model_ids]
+    
     epochs = min([stats["epochs"] for stats in [stats1]+stats2]) if len(model_ids) > 1 else stats1["epochs"]
 
     x = np.arange(epochs)
@@ -1375,15 +1394,12 @@ if __name__ == "__main__":
     era5_latex = False
     plot_darcy_sample = False
 
-    if plot_era5_training:
-        # PLOT ERA 5 THINGS:
-        # -------------------------------
-        model_path = Path('./models')
-        #'era5_cleanhp_50e-c1e3'
-        model_ids = ['era5_clean_hp3-mbaseline', 'era5_clean_hp3-ne_c1e3','era5_clean_hp3-ne_c1e2', 'era5_clean_hp3-ne_c1e1']
-        # model_ids = ['era5_clean_hp3-mbaseline', 'era5_clean_hp3-ne_c1e2','era5_clean_hp3-c1e2_pv', 'era5_clean_hp3-c1e2_gw']
-        #plot_and_save_era5(f"logs/era5_baseline-v2-1/version_0/metrics.csv", Path(f"reports/figures/{model_id}"))
+    model_path = Path('./models')
+    model_ids = ['era5_clean_hp3-baseline-retrain-retrain','era5_clean_hp3-c1e2_pv-retrain']
 
+    if plot_era5_training:
+        # PLOT ERA 5 LOSS:
+        # -------------------------------
         plot_cv_val_metrics(
             model_ids=model_ids,
             fold_num=5,
@@ -1391,13 +1407,12 @@ if __name__ == "__main__":
             out_dir=f"reports/figures/era5_baseline_comparisons",
             smooth_window=1,
             data_type="era5",
-            prefix="ne_"
+            prefix=""
         )
         # ---------------------------------------------------
 
     if plot_era5_residual:
         #Load model
-        model_path = Path('./models')
         model_id = 'exp1-ghxhv'
         cfg = OmegaConf.load(model_path / (model_id) / "config.yaml")
         diffusion_model = DiffusionModel(cfg)
@@ -1414,10 +1429,6 @@ if __name__ == "__main__":
         breakpoint()
 
     if plot_era5_individual_var_mse:
-        model_path = Path('./models')
-        # model_ids = ['era5_clean_hp3-mbaseline', 'era5_clean_hp3-ne_c1e3','era5_clean_hp3-ne_c1e2', 'era5_clean_hp3-ne_c1e1']
-        model_ids = ['era5_clean_hp3-mbaseline', 'era5_clean_hp3-ne_c1e2','era5_clean_hp3-c1e2_pv', 'era5_clean_hp3-c1e2_gw']
-        #plot_and_save_era5(f"logs/era5_baseline-v2-1/version_0/metrics.csv", Path(f"reports/figures/{model_id}"))
 
         plot_cv_individual_val_metrics(
             model_ids=model_ids,
@@ -1428,10 +1439,6 @@ if __name__ == "__main__":
             prefix = 'ne_'
         )
     if plot_era5_residual_metrics:
-        model_path = Path('./models')
-        # model_ids = ['era5_clean_hp3-mbaseline', 'era5_clean_hp3-ne_c1e3','era5_clean_hp3-ne_c1e2', 'era5_clean_hp3-ne_c1e1']
-        model_ids = ['era5_clean_hp3-mbaseline', 'era5_clean_hp3-ne_c1e2','era5_clean_hp3-c1e2_pv', 'era5_clean_hp3-c1e2_gw']
-        #plot_and_save_era5(f"logs/era5_baseline-v2-1/version_0/metrics.csv", Path(f"reports/figures/{model_id}"))
 
         plot_cv_residual_metrics_era5(
             model_ids=model_ids,
@@ -1444,12 +1451,8 @@ if __name__ == "__main__":
 
     if plot_darcy:
         model_path = Path('./models')
-        model_id = 'exp1-aaaaa'
-        model_id_2 = 'exp1-aaaab'
-        # cfg = OmegaConf.load(model_path / (model_id) / "config.yaml")
-        # diffusion_model = DiffusionModel(cfg)
-        # diffusion_model.load_model(model_path / model_id / f"best-val_loss-weights.pt")
-        # plot_darcy_samples(diffusion_model, model_id, Path('./reports/figures') / model_id)
+        model_id = 'era5_cleanhp_50e-bqlmk'
+        model_id_2 = 'era5_cleanhp_50e-hgrnf'
 
         plot_darcy_val_metrics(
             model_id_1=model_id,
@@ -1459,8 +1462,6 @@ if __name__ == "__main__":
             out_dir=f"reports/figures/{model_id}",
             smooth_window=20,
         )
-        breakpoint()
-        
 
         cfg = OmegaConf.load(model_path / model_id / "config.yaml")
         dataset = DatasetRegistry.create(cfg.dataset)
@@ -1481,20 +1482,11 @@ if __name__ == "__main__":
         plot_darcy_samples(diffusion_model_1, diffusion_model_2, model_id_2, Path('./reports/figures') / model_id_2)
 
     if era5_latex:
-        model_ids = [
-            "era5_clean_hp3-mbaseline",
-            # "era5_clean_hp3-ne_c1e3",
-            "era5_clean_hp3-ne_c1e2",
-            # "era5_clean_hp3-ne_c1e1",
-            "era5_clean_hp3-c1e2_pv",
-            "era5_clean_hp3-c1e2_gw",
-        ]
-
         pretty = {
-            "era5_clean_hp3-mbaseline": r"Baseline (DDPM)",
-            # "era5_clean_hp3-ne_c1e3": r"$c=10^{-3}$",
+            "era5_clean_hp3-mbaseline": r"Baseline",
+            "era5_clean_hp3-ne_c1e1": r"$c=10^{-1}$",
             "era5_clean_hp3-ne_c1e2": r"$c=10^{-2}$",
-            # "era5_clean_hp3-ne_c1e1": r"$c=10^{-1}$",
+            "era5_clean_hp3-ne_c1e3": r"$c=10^{-3}$",
             "era5_clean_hp3-c1e2_pv": r"$\mathcal{R}_1$: $c=10^{-2}$",
             "era5_clean_hp3-c1e2_gw": r"$\mathcal{R}_2$: $c=10^{-2}$",
         }
