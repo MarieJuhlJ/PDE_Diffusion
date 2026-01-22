@@ -58,31 +58,31 @@ COLOR_BARS = {
 }
 
 # Custom colour palette (different from default Matplotlib cycle)
-diffusion_colors = ("#2A9D8F","#9AD1C5")   # teal and light teal
+diffusion_colors = ("#8800FF","#5900A7")
 pidm_colors = {
-    'c1e1': "#E76F51",
+    'c1e1': "#E32D00",
     'c1e2': "#1A4DAC",
-    'c1e3': "#843284",
-    'c1e2_pv': "#02BFB9",
-    'c1e2_gw': "#D92323",
+    'c1e3': "#2B9A0C",
+    'c1e2_pv': "#BF0251",
+    'c1e2_gw': "#D98123",
 }
 train_loss_pidm_colors = {
-    "c1e1": "#FFBE78",
+    "c1e1": "#F18A70",
     "c1e2": "#4E78A0",
-    "c1e3": "#C32275",
-    "c1e2_pv": "#0290BF",
+    "c1e3": "#88DB72",
+    "c1e2_pv": "#DA729D",
     "c1e2_gw": "#D97223",
 }
 
 val_loss_pidm_colors = {
-    "c1e1": "#E76F51",
+    "c1e1": "#E32D00",
     "c1e2": "#1A4DAC",
-    "c1e3": "#843284",
-    "c1e2_pv": "#02BFB9",
-    "c1e2_gw": "#D92323",
+    "c1e3": "#2B9A0C",
+    "c1e2_pv": "#BF0251",
+    "c1e2_gw": "#D98123",
 }
-train_loss_diff_colors = ("#32D9B2","#6FBEDB")
-val_loss_diff_colors   = ("#2A9D8F","#9AD1C5")
+train_loss_diff_colors = ("#B977F2","#6E5386")
+val_loss_diff_colors   = ("#8800FF","#5900A7")
 
 def plot_darcy_samples(model_1, model_2, model_id, out_dir=Path("./reports/figures")):
     save_dir = Path(out_dir) / model_id
@@ -384,23 +384,28 @@ def visualize_time_series(dataset, variable, level=500, dir=Path("./reports/figu
     plt.savefig(plot_path, bbox_inches='tight', pad_inches=0.05)
     print(f"Saved time series plot to {plot_path}")
 
-def plot_darcy_val_metrics(
-    model_id_1,
-    model_id_2,
-    fold_num,
-    log_path,
-    out_dir,
-    smooth_window=10,
-    dpi=300,
-):
+def _to_2d(x):
+    """Accepts (T,), (N,T), list of (T,), list of list; returns (N,T) float array."""
+    if x is None:
+        return None
+    if isinstance(x, (list, tuple)) and len(x) > 0 and isinstance(x[0], (list, tuple, np.ndarray)):
+        x = np.array(x, dtype=float)
+    else:
+        x = np.array(x, dtype=float)
+    if x.ndim == 1:
+        x = x[None, :]
+    if x.ndim != 2:
+        raise ValueError(f"Expected 1D or 2D array-like, got shape {x.shape}")
+    return x
+
+def plot_darcy_val_metrics(model_id_1, model_id_2, fold_num, log_path, out_dir, smooth_window=10):
     import numpy as np
     import pandas as pd
     import matplotlib.pyplot as plt
     from pathlib import Path
 
-    # --- Global styling tweaks ---
+    # --- Global styling tweaks (do NOT set figure.figsize here; we set it per-figure) ---
     plt.rcParams.update({
-        "figure.figsize": (13, 5),
         "axes.grid": True,
         "grid.alpha": 0.3,
         "axes.titlesize": 13,
@@ -410,63 +415,194 @@ def plot_darcy_val_metrics(
         "legend.fontsize": 10,
     })
 
-    # --- Colors ---
-    diffusion_color = "#8904DC"
-    diffusion_ci    = "#A658D6"
-    pidm_color      = "#DB0105"
-    pidm_ci         = "#D86567"
+    # Custom colour palette (different from default Matplotlib cycle)
+    diffusion_color = "#971A7C"
+    diffusion_ci    = "#ED63CF"
+    pidm_color      = "#BA090C"
+    pidm_ci         = "#F77C7E"
+    train_loss_pidm_color = "#0239C5"
+    train_loss_pidm_ci    = "#3B60BE"
+    val_loss_pidm_color   = "#028EC5"
+    val_loss_pidm_ci      = "#4497B8"
+    train_loss_diff_color = "#E2901C"
+    train_loss_diff_ci    = "#D19541"
+    val_loss_diff_color   = "#D17321"
+    val_loss_diff_ci      = "#CE9563"
 
-    train_loss_pidm_color = "#E7002A"
-    train_loss_pidm_ci    = "#FB3D60"
-    val_loss_pidm_color   = "#E20C69"
-    val_loss_pidm_ci      = "#E13958"
-
-    train_loss_diff_color = "#3915EB"
-    train_loss_diff_ci    = "#684EEC"
-    val_loss_diff_color   = "#1599EB"
-    val_loss_diff_ci      = "#53ADE5"
-
-    # ---------------- Helpers ----------------
-    def moving_average_2d(arr: np.ndarray, window: int) -> np.ndarray:
-        """Moving average along time axis for 2D array [fold, time]. Returns shorter 'valid' length."""
+    def moving_average_2d(arr, window):
+        """Apply moving average along the time axis for a 2D array [fold, time]."""
         if window <= 1:
             return arr
         kernel = np.ones(window) / window
-        return np.apply_along_axis(lambda m: np.convolve(m, kernel, mode="valid"), axis=1, arr=arr)
+        return np.apply_along_axis(
+            lambda m: np.convolve(m, kernel, mode="valid"), axis=1, arr=arr
+        )
 
-    def _read_metric_series(df: pd.DataFrame, col: str) -> np.ndarray:
-        """Read a column as float array, drop NaNs."""
-        if col not in df.columns:
-            return np.array([], dtype=float)
-        return pd.to_numeric(df[col], errors="coerce").dropna().to_numpy(dtype=float)
+    def _load_model_stats(model_id, smooth_window=1):
+        residual_errors = []
+        weighted_mse_errors = []
+        train_loss = []
+        val_loss = []
+        steps = None
 
-    def _stack_and_trim(series_list):
-        """Stack 1D arrays into 2D [fold, time] by trimming all to the minimum length."""
-        if len(series_list) == 0:
-            return np.empty((0, 0), dtype=float)
-        lengths = [len(s) for s in series_list if s is not None]
-        if len(lengths) == 0 or min(lengths) == 0:
-            return np.empty((0, 0), dtype=float)
-        L = min(lengths)
-        trimmed = [s[:L] for s in series_list]
-        return np.vstack(trimmed)
+        for fold in range(1, fold_num + 1):
+            current_model_id = f"{model_id}-{fold}"
+            csv_path = Path(log_path) / current_model_id / "version_0" / "metrics.csv"
 
-    def _mean_ci(arr2d: np.ndarray):
-        """
-        Compute mean and 95% CI over folds at each time.
-        Returns (mean, low, high). If folds==0 => empty arrays.
-        """
-        if arr2d.size == 0:
-            empty = np.array([], dtype=float)
-            return empty, empty, empty
-        n = arr2d.shape[0]
-        mean = arr2d.mean(axis=0)
-        std = arr2d.std(axis=0)
-        half = 1.96 * std / np.sqrt(n) if n > 0 else 0.0
-        return mean, mean - half, mean + half
+            df = (
+                pd.read_csv(csv_path)
+                .apply(pd.to_numeric, errors="ignore")
+                .dropna(subset=["step"])
+                .sort_values("step")
+            )
 
-    def load_model_stats(model_id: str, smooth_window: int):
-        residuals, mses, train_losses, val_losses = [], [], [], []
+            if steps is None:
+                steps = df["step"].values
+
+            residual_errors.append(df["val_darcy_residual"].dropna().values)
+            weighted_mse_errors.append(df["val_mse_(weighted)"].dropna().values)
+            train_loss.append(df["train_loss"].dropna().values)
+            val_loss.append(df["val_loss"].dropna().values)
+
+        residual_errors = np.array(residual_errors)      # shape: [fold, time]
+        weighted_mse_errors = np.array(weighted_mse_errors)
+        train_loss = np.array(train_loss)
+        val_loss = np.array(val_loss)
+
+        # --- Smooth over time (epochs) ---
+        residual_errors = moving_average_2d(residual_errors, smooth_window)
+        weighted_mse_errors = moving_average_2d(weighted_mse_errors, smooth_window)
+        train_loss = moving_average_2d(train_loss, smooth_window)
+        val_loss = moving_average_2d(val_loss, smooth_window)
+
+        n = residual_errors.shape[0]
+
+        res_mean = residual_errors.mean(axis=0)
+        res_std = residual_errors.std(axis=0)
+        res_low = res_mean - 1.96 * res_std / np.sqrt(n)
+        res_high = res_mean + 1.96 * res_std / np.sqrt(n)
+
+        mse_mean = weighted_mse_errors.mean(axis=0)
+        mse_std = weighted_mse_errors.std(axis=0)
+        mse_low = mse_mean - 1.96 * mse_std / np.sqrt(n)
+        mse_high = mse_mean + 1.96 * mse_std / np.sqrt(n)
+
+        train_loss_mean = train_loss.mean(axis=0)
+        train_loss_std = train_loss.std(axis=0)
+        val_loss_mean = val_loss.mean(axis=0)
+        val_loss_std = val_loss.std(axis=0)
+
+        train_loss_low = train_loss_mean - 1.96 * train_loss_std / np.sqrt(n)
+        train_loss_high = train_loss_mean + 1.96 * train_loss_std / np.sqrt(n)
+        val_loss_low = val_loss_mean - 1.96 * val_loss_std / np.sqrt(n)
+        val_loss_high = val_loss_mean + 1.96 * val_loss_std / np.sqrt(n)
+
+        epochs = res_mean.shape[0]
+
+        return {
+            "epochs": epochs,
+            "res_mean": res_mean,
+            "res_low": res_low,
+            "res_high": res_high,
+            "mse_mean": mse_mean,
+            "mse_low": mse_low,
+            "mse_high": mse_high,
+            "train_loss_mean": train_loss_mean,
+            "train_loss_low": train_loss_low,
+            "train_loss_high": train_loss_high,
+            "val_loss_mean": val_loss_mean,
+            "val_loss_low": val_loss_low,
+            "val_loss_high": val_loss_high,
+        }
+
+    # ---------------- Output folder ----------------
+    out_dir = Path(out_dir)
+    plot_folder = out_dir / f"{model_id_1}_vs_{model_id_2}_darcy_val_metrics"
+    plot_folder.mkdir(parents=True, exist_ok=True)
+
+    stats1 = _load_model_stats(model_id_1, smooth_window)
+    stats2 = _load_model_stats(model_id_2, smooth_window)
+
+    epochs = min(stats1["epochs"], stats2["epochs"])
+    x = np.arange(epochs)
+
+    def save_fig(fig, filename):
+        path = plot_folder / filename
+        fig.savefig(path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        print(f"Saved: {path}")
+
+    # ---------------- Plot 1: Residual ----------------
+    fig, ax = plt.subplots(figsize=(4.1, 4.1))
+
+    ax.plot(x, stats1["res_mean"][:epochs], label="Diffusion mean", linewidth=2.2, color=diffusion_color)
+    ax.fill_between(x, stats1["res_low"][:epochs], stats1["res_high"][:epochs],
+                    alpha=0.3, color=diffusion_ci, label="Diffusion 95% CI")
+
+    ax.plot(x, stats2["res_mean"][:epochs], label="PIDM mean", linewidth=2.2, color=pidm_color)
+    ax.fill_between(x, stats2["res_low"][:epochs], stats2["res_high"][:epochs],
+                    alpha=0.3, color=pidm_ci, label="PIDM 95% CI")
+
+    ax.set_xlabel(f"Epochs")
+    ax.set_ylabel(r"$\mathcal{R}_{\text{MAE}}(\mathbf{x_0}) \sim p_\theta (\mathbf{x_0})$")
+    ax.set_title("Darcy Sample Residual MAE")
+    ax.set_yscale("log")
+    ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
+    fig.tight_layout()
+    save_fig(fig, "01_val_darcy_residual.png")
+
+    # ---------------- Plot 2: Weighted MSE ----------------
+    fig, ax = plt.subplots(figsize=(4.1, 4.1))
+
+    ax.plot(x, stats1["mse_mean"][:epochs], label="Diffusion mean", linewidth=2.2, color=diffusion_color)
+    ax.fill_between(x, stats1["mse_low"][:epochs], stats1["mse_high"][:epochs],
+                    alpha=0.3, color=diffusion_ci, label="Diffusion 95% CI")
+
+    ax.plot(x, stats2["mse_mean"][:epochs], label="PIDM mean", linewidth=2.2, color=pidm_color)
+    ax.fill_between(x, stats2["mse_low"][:epochs], stats2["mse_high"][:epochs],
+                    alpha=0.3, color=pidm_ci, label="PIDM 95% CI")
+
+    ax.set_xlabel(f"Epochs")
+    ax.set_ylabel(r"$\mathbb{E}_{t, \mathbf{x_0}}[\lambda_t \|\mathbf{x_0} - \hat{\mathbf{x}}_0 (\mathbf{x}_t,t) \|^2]$")
+    ax.set_title("Validation Weighted MSE")
+    ax.set_yscale("log")
+    ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
+    fig.tight_layout()
+    save_fig(fig, "02_val_weighted_mse.png")
+
+    # ---------------- Plot 3: Train vs Val loss ----------------
+    fig, ax = plt.subplots(figsize=(4.1, 4.1))
+
+    # Diffusion
+    ax.plot(x, stats1["train_loss_mean"][:epochs], label="Train loss mean (Diffusion)", linewidth=2.2, color=train_loss_diff_color)
+    ax.fill_between(x, stats1["train_loss_low"][:epochs], stats1["train_loss_high"][:epochs],
+                    alpha=0.3, color=train_loss_diff_ci, label="Train loss 95% CI (Diffusion)")
+
+    ax.plot(x, stats1["val_loss_mean"][:epochs], label="Val loss mean (Diffusion)", linewidth=2.2, color=val_loss_diff_color)
+    ax.fill_between(x, stats1["val_loss_low"][:epochs], stats1["val_loss_high"][:epochs],
+                    alpha=0.3, color=val_loss_diff_ci, label="Val loss 95% CI (Diffusion)")
+
+    # PIDM
+    ax.plot(x, stats2["train_loss_mean"][:epochs], label="Train loss mean (PIDM)", linewidth=2.2, color=train_loss_pidm_color)
+    ax.fill_between(x, stats2["train_loss_low"][:epochs], stats2["train_loss_high"][:epochs],
+                    alpha=0.3, color=train_loss_pidm_ci, label="Train loss 95% CI (PIDM)")
+
+    ax.plot(x, stats2["val_loss_mean"][:epochs], label="Val loss mean (PIDM)", linewidth=2.2, color=val_loss_pidm_color)
+    ax.fill_between(x, stats2["val_loss_low"][:epochs], stats2["val_loss_high"][:epochs],
+                    alpha=0.3, color=val_loss_pidm_ci, label="Val loss 95% CI (PIDM)")
+
+    ax.set_xlabel(f"Epochs")
+    ax.set_ylabel(
+        r"$\mathbb{E}_{t, \mathbf{x_0}}[\lambda_t \|\mathbf{x_0} - \hat{\mathbf{x}}_0 (\mathbf{x}_t,t) \|^2] + "
+        r"\frac{1}{2 \tilde{\Sigma}} || \mathcal{R}(\mathbf{x}_0^*(\mathbf{x}_t,t))||^2$"
+    )
+    ax.set_title("Train vs Validation loss")
+    ax.set_yscale("log")
+    ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
+    fig.tight_layout()
+    save_fig(fig, "03_train_vs_val_loss.png")
+
+
 def moving_average_2d(arr, window):
     """Apply moving average along the time axis for a 2D array [fold, time]."""
     if window <= 1:
@@ -844,7 +980,7 @@ def plot_cv_val_metrics(model_ids, fold_num, log_path, out_dir, smooth_window=10
     ax.set_xlabel(f"Epoch{f" (smoothed, window={smooth_window})" if smooth_window>1 else ""}")
     ax.set_ylabel(r"$\mathcal{R}_1(\hat{x}_0) + \mathcal{R}_2(\hat{x}_0)$")
     # ax.set_ylabel(r"$\mathcal{R}_{\text{MAE}}(\mathbf{x_0}) \sim p_\theta (\mathbf{x_0})$")
-    ax.set_title(r"Validation of residuals")
+    ax.set_title(r"MAE of residuals through mean estimation over validation set")
     ax.set_yscale("log")
     ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
 
@@ -860,7 +996,7 @@ def plot_cv_val_metrics(model_ids, fold_num, log_path, out_dir, smooth_window=10
             ax = fill_in_ax(ax, x, stats2[i], 'mse', epochs, pidm_colors[model_name], f"PIDM-{suffix}")
 
     ax.set_xlabel(f"Epoch{f" (smoothed, window={smooth_window})" if smooth_window>1 else ""}")
-    ax.set_ylabel(r"$\mathbb{E}_{t, \mathbf{x_0}}[\lambda_t \|\mathbf{x_0} - \hat{\mathbf{x}}_0\|^2]$")
+    ax.set_ylabel(r"$\mathbb{E}_{t, \mathbf{x_0}}[\lambda_t \|\mathbf{x_0} - \hat{\mathbf{x}}_0 (\mathbf{x}_t,t) \|^2]$")
     ax.set_title("Validation Weighted MSE")
     ax.set_yscale("log")
     ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
@@ -878,7 +1014,10 @@ def plot_cv_val_metrics(model_ids, fold_num, log_path, out_dir, smooth_window=10
             ax = fill_in_ax(ax, x, stats2[i],"val_loss", epochs, val_loss_pidm_colors[model_name], f"PIDM-{suffix} Val loss")
 
     ax.set_xlabel(f"Epoch{f" (smoothed, window={smooth_window})" if smooth_window>1 else ""}")
-    ax.set_ylabel(r"$\mathbb{E}_{t, \mathbf{x_0}}[\lambda_t \|\mathbf{x_0} - \hat{\mathbf{x}}_0\|^2] + \frac{1}{2 \tilde{\Sigma}} || \mathcal{R}(\mathbf{x}_0^*)(\mathbf{x}_t,t)||^2$")
+    ax.set_ylabel(
+        r"$\mathbb{E}_{t, \mathbf{x_0}}[\lambda_t \|\mathbf{x_0} - \hat{\mathbf{x}}_0 (\mathbf{x}_t,t) \|^2] + "
+        r"\frac{1}{2 \tilde{\Sigma}} || \mathcal{R}(\mathbf{x}_0^*(\mathbf{x}_t,t))||^2$"
+    )
     ax.set_title("Train vs Validation loss")
     ax.set_yscale("log")
     ax.legend(frameon=True, fancybox=True, framealpha=0.9, loc="upper right")
@@ -929,84 +1068,52 @@ def plot_and_save_era5(csv_path, out_dir, loss_title="Loss", residual_title="Res
     plt.clf()
     print(f"saved fig to {out_dir}/residuals.png")
 
-def darcy_models_summary_latex_table(
+
+def era5_models_summary_latex_table(
     model_ids,
     fold_num,
     log_path,
     smooth_window=10,
-    caption="Model comparison (best epoch; mean $\\pm$ 95\\% CI across folds)",
-    label="tab:model_summary",
+    caption="ERA5 comparison of metrics of mean across folds",
+    label="tab:era5_summary",
     sig_figs=3,
     wrap_math=True,
+    resize_to_linewidth=True,
+    model_id_to_header=None,
 ):
     """
-    Returns a LaTeX table (string) summarizing models with:
-      - Best (min) Darcy residual (mean ± 95% CI)
-      - Best (min) weighted MSE (mean ± 95% CI)
-      - Darcy residual evaluated at the epoch where weighted MSE is best (mean ± 95% CI)
-      - Best (min) val loss (mean ± 95% CI)
+    Build a LaTeX table summarizing ERA5 validation metrics across folds,
+    using load_model_stats() outputs (mean across folds + smoothing).
 
-    CI half-width = 1.96 * std / sqrt(n_folds), computed across folds at each epoch.
-    Smoothing is moving average (valid mode) along the epoch axis, applied per-fold.
+    Rows:
+      - Total residual @ best val loss
+      - R1 @ best val loss
+      - R2 @ best val loss
+      - Weighted MSE @ best val loss
+      - Weighted MSE (best)
+      - Total residual @ best Weighted MSE
     """
-    import numpy as np
-    import pandas as pd
-    from pathlib import Path
     import math
+    import numpy as np
 
-    # --------- metrics to load ----------
-    COL_RES = "val_darcy_residual"
-    COL_WMSE = "val_mse_(weighted)"
-    COL_VLOSS = "val_loss"
-    required_cols = [COL_RES, COL_WMSE, COL_VLOSS]
+    ROWS = [
+        ("total_at_vloss", r"Total residual $(\mathcal{R}_1+\mathcal{R}_2)$ @ best val loss", "min"),
+        ("r1_at_vloss",    r"$\mathcal{R}_1$ (planetary) @ best val loss",                    "min"),
+        ("r2_at_vloss",    r"$\mathcal{R}_2$ (geo wind) @ best val loss",                     "min"),
+        ("wmse_at_vloss",  r"Weighted MSE @ best val loss",                                   "min"),
+        ("wmse_best",      r"Weighted MSE (best)",                                            "min"),
+        ("total_at_wmse",  r"Total residual @ best Weighted MSE",                             "min"),
+    ]
 
-    # --------- helpers ----------
-    def moving_average_2d(arr: np.ndarray, window: int) -> np.ndarray:
-        if window <= 1:
-            return arr
-        kernel = np.ones(window) / window
-        return np.apply_along_axis(lambda m: np.convolve(m, kernel, mode="valid"), axis=1, arr=arr)
-
-    def _read_metric_series(df: pd.DataFrame, col: str) -> np.ndarray:
-        if col not in df.columns:
-            return np.array([], dtype=float)
-        return pd.to_numeric(df[col], errors="coerce").dropna().to_numpy(dtype=float)
-
-    def _stack_and_trim(series_list):
-        lengths = [len(s) for s in series_list if s is not None]
-        if len(lengths) == 0 or min(lengths) == 0:
-            return np.empty((0, 0), dtype=float)
-        L = min(lengths)
-        trimmed = [s[:L] for s in series_list]
-        return np.vstack(trimmed)
-
-    def _mean_ci_halfwidth(arr2d: np.ndarray):
-        if arr2d.size == 0:
-            empty = np.array([], dtype=float)
-            return empty, empty
-        n = arr2d.shape[0]
-        mean = arr2d.mean(axis=0)
-        std = arr2d.std(axis=0)
-        half = 1.96 * std / np.sqrt(n) if n > 0 else np.zeros_like(mean)
-        return mean, half
-
-    def tex_escape(s: str) -> str:
-        return s.replace("_", r"\_")
-
+    # ---------- formatting helpers ----------
     def to_latex_sci(x: float, decimals: int = 2) -> str:
-        """
-        LaTeX scientific notation like 1.23\\times 10^{-4},
-        using a FIXED number of decimals (keeps trailing zeros).
-        """
         if x == 0:
             return f"{0:.{decimals}f}" if decimals > 0 else "0"
-
         if not math.isfinite(x):
             return r"\infty" if x > 0 else (r"-\infty" if x < 0 else r"\mathrm{nan}")
 
         sign = "-" if x < 0 else ""
         ax = abs(x)
-
         exp = int(math.floor(math.log10(ax)))
         mant = ax / (10 ** exp)
 
@@ -1016,149 +1123,123 @@ def darcy_models_summary_latex_table(
             exp += 1
 
         mant_str = f"{mant_rounded:.{decimals}f}"
-
         if exp == 0:
             return f"{sign}{mant_str}"
-
-        # optional: keep clean 10^k formatting
         if float(mant_str) == 1.0:
             return f"{sign}10^{{{exp}}}"
-
         return f"{sign}{mant_str}\\times 10^{{{exp}}}"
 
-    def fmt_pm(mean: float, half: float) -> str:
-        s = to_latex_sci(mean, sig_figs) + r" \pm " + to_latex_sci(half, sig_figs)
-        return f"${s}$" if wrap_math else s
+    def tex_escape(s: str) -> str:
+        return s.replace("_", r"\_")
 
-    def load_model_all_stats(model_id: str):
-        """
-        Load required metrics for all folds, align lengths across folds AND across metrics,
-        smooth, then return mean/half arrays per metric.
-        """
-        per_col_series = {c: [] for c in required_cols}
+    def fmt_cell(val: float, style: str = None) -> str:
+        core = to_latex_sci(float(val), decimals=2)
+        if style == "best":
+            core = r"\boldsymbol{" + core + "}"
+        elif style == "second":
+            core = r"\underline{" + core + "}"
+        return f"${core}$" if wrap_math else core
 
-        for fold in range(1, fold_num + 1):
-            run_id = f"{model_id}-{fold}"
-            csv_path = Path(log_path) / run_id / "version_0" / "metrics.csv"
-            if not csv_path.exists():
-                raise FileNotFoundError(f"Missing metrics.csv: {csv_path}")
+    # ---------- load per-model stats via your helper ----------
+    # Expecting load_model_stats to be available in scope.
+    model_stats = {}
+    for mid in model_ids:
+        model_stats[mid] = load_model_stats(
+            mid,
+            smooth_window=smooth_window,
+            fold_num=fold_num,
+            log_path=log_path,
+            data_type="era5",
+        )
 
-            df = pd.read_csv(csv_path).apply(pd.to_numeric, errors="ignore")
-            if "step" in df.columns:
-                df = df.dropna(subset=["step"]).sort_values("step")
+    # Align all models to common length
+    common_T = min(model_stats[mid]["epochs"] for mid in model_ids)
 
-            for c in required_cols:
-                per_col_series[c].append(_read_metric_series(df, c))
-
-        # stack each metric across folds (trim across folds)
-        per_col_arr2d = {c: _stack_and_trim(per_col_series[c]) for c in required_cols}
-
-        # align across metrics too (use shared time length)
-        lengths = [per_col_arr2d[c].shape[1] for c in required_cols if per_col_arr2d[c].size > 0]
-        if len(lengths) == 0:
-            raise ValueError(f"No usable data found for model '{model_id}' in columns {required_cols}.")
-        L = min(lengths)
-
-        for c in required_cols:
-            arr = per_col_arr2d[c]
-            if arr.size == 0:
-                raise ValueError(f"Metric '{c}' missing/empty for model '{model_id}'.")
-            per_col_arr2d[c] = arr[:, :L]
-
-        # smooth (valid) -> shorter
-        for c in required_cols:
-            per_col_arr2d[c] = moving_average_2d(per_col_arr2d[c], smooth_window)
-
-        # after smoothing, lengths still identical across metrics (same L and same window)
-        out = {}
-        for c in required_cols:
-            mean, half = _mean_ci_halfwidth(per_col_arr2d[c])
-            out[c] = {"mean": mean, "half": half}
-
-        return out
-
-    def best_idx(mean: np.ndarray, direction: str = "min") -> int:
-        return int(np.argmax(mean)) if direction == "max" else int(np.argmin(mean))
-
-    # --------- compute per-model stats ----------
-    model_stats = {mid: load_model_all_stats(mid) for mid in model_ids}
-
-    # --------- build rows ----------
-    # For each model:
-    # - residual_best: best over residual mean
-    # - wmse_best: best over wmse mean
-    # - residual_at_best_wmse: residual at wmse_best epoch
-    # - vloss_best: best over vloss mean
-    rows = [
-        {"key": "res_best", "label": r"Darcy residual (best)", "direction": "min"},
-        {"key": "wmse_best", "label": r"Weighted MSE (best)", "direction": "min"},
-        {"key": "res_at_wmse", "label": r"Darcy residual @ best Weighted MSE", "direction": "min"},
-        {"key": "vloss_best", "label": r"Val loss (best)", "direction": "min"},
-    ]
-
-    # values[row_key][model_id] = dict(mean, half, epoch)
-    values = {r["key"]: {} for r in rows}
+    # ---------- compute values ----------
+    values = {k: {} for (k, _, _) in ROWS}
 
     for mid in model_ids:
-        res = model_stats[mid][COL_RES]
-        wmse = model_stats[mid][COL_WMSE]
-        vloss = model_stats[mid][COL_VLOSS]
+        s = model_stats[mid]
 
-        i_res = best_idx(res["mean"], "min")
-        i_wmse = best_idx(wmse["mean"], "min")
-        i_vloss = best_idx(vloss["mean"], "min")
+        # mean series (already smoothed + mean across folds)
+        # NOTE: use the per-component residual means (res1/res2) so total = res1+res2,
+        # rather than s["total_era_res_mean"] (either works; this is explicit).
+        r1    = np.asarray(s["res1_mean"][:common_T], dtype=float)
+        r2    = np.asarray(s["res2_mean"][:common_T], dtype=float)
+        total = r1 + r2
 
-        # shared length sanity
-        T = min(len(res["mean"]), len(wmse["mean"]), len(vloss["mean"]))
-        i_res = min(i_res, T - 1)
-        i_wmse = min(i_wmse, T - 1)
-        i_vloss = min(i_vloss, T - 1)
+        wmse  = np.asarray(s["mse_mean"][:common_T], dtype=float)
+        vloss = np.asarray(s["val_loss_mean"][:common_T], dtype=float)
 
-        values["res_best"][mid] = {"epoch": i_res, "mean": float(res["mean"][i_res]), "half": float(res["half"][i_res])}
-        values["wmse_best"][mid] = {"epoch": i_wmse, "mean": float(wmse["mean"][i_wmse]), "half": float(wmse["half"][i_wmse])}
-        values["res_at_wmse"][mid] = {"epoch": i_wmse, "mean": float(res["mean"][i_wmse]), "half": float(res["half"][i_wmse])}
-        values["vloss_best"][mid] = {"epoch": i_vloss, "mean": float(vloss["mean"][i_vloss]), "half": float(vloss["half"][i_vloss])}
+        # "best" epoch := lowest validation loss
+        i_vloss = int(np.argmin(vloss))
+        # absolute best wMSE epoch
+        i_wmse = int(np.argmin(wmse))
 
-    # best model per row (based on mean, respecting direction)
-    best_model_per_row = {}
-    for r in rows:
-        key = r["key"]
-        direction = r.get("direction", "min")
-        items = list(values[key].items())
-        if direction == "max":
-            best_mid = max(items, key=lambda kv: kv[1]["mean"])[0]
-        else:
-            best_mid = min(items, key=lambda kv: kv[1]["mean"])[0]
-        best_model_per_row[key] = best_mid
+        values["total_at_vloss"][mid] = {"val": float(total[i_vloss]), "epoch": i_vloss}
+        values["r1_at_vloss"][mid]    = {"val": float(r1[i_vloss]),    "epoch": i_vloss}
+        values["r2_at_vloss"][mid]    = {"val": float(r2[i_vloss]),    "epoch": i_vloss}
+        values["wmse_at_vloss"][mid]  = {"val": float(wmse[i_vloss]),  "epoch": i_vloss}
 
-    # --------- assemble LaTeX ----------
-    header_cols = "l" + "c" * len(model_ids)
+        values["wmse_best"][mid]      = {"val": float(wmse[i_wmse]),   "epoch": i_wmse}
+        values["total_at_wmse"][mid]  = {"val": float(total[i_wmse]),  "epoch": i_wmse}
+
+    # ---------- determine best + second-best per row ----------
+    best_and_second = {}
+    for (row_key, _, direction) in ROWS:
+        items = [(mid, values[row_key][mid]["val"]) for mid in model_ids]
+        items_sorted = sorted(items, key=lambda x: x[1], reverse=(direction == "max"))
+        best_mid = items_sorted[0][0] if len(items_sorted) > 0 else None
+        second_mid = items_sorted[1][0] if len(items_sorted) > 1 else None
+        best_and_second[row_key] = (best_mid, second_mid)
+
+    # ---------- header names ----------
+    if model_id_to_header is None:
+        headers = {mid: tex_escape(mid) for mid in model_ids}
+    else:
+        headers = {mid: model_id_to_header.get(mid, tex_escape(mid)) for mid in model_ids}
+
+    # ---------- build LaTeX ----------
+    colspec = "l" + "c" * len(model_ids)
+
     lines = []
-    lines.append(r"\begin{table}[t]")
+    lines.append(r"\begin{table}[H]")
     lines.append(r"\centering")
     lines.append(r"\caption{" + caption + r"}")
     lines.append(r"\label{" + label + r"}")
-    lines.append(r"\begin{tabular}{" + header_cols + r"}")
+
+    if resize_to_linewidth:
+        lines.append(r"\resizebox{\linewidth}{!}{%")
+
+    lines.append(r"\begin{tabular}{" + colspec + r"}")
     lines.append(r"\toprule")
-    lines.append("Metric & " + " & ".join([tex_escape(mid) for mid in model_ids]) + r" \\")
+    lines.append("Metric & " + " & ".join(headers[mid] for mid in model_ids) + r" \\")
     lines.append(r"\midrule")
 
-    for r in rows:
-        key = r["key"]
-        row_cells = [r["label"]]
+    for (row_key, row_label, _) in ROWS:
+        best_mid, second_mid = best_and_second[row_key]
+        row_cells = [row_label]
         for mid in model_ids:
-            v = values[key][mid]
-            cell = fmt_pm(v["mean"], v["half"]) + rf" (ep={v['epoch']})"
-            if mid == best_model_per_row[key]:
-                cell = r"\textbf{" + cell + "}"
-            row_cells.append(cell)
+            style = None
+            if mid == best_mid:
+                style = "best"
+            elif mid == second_mid:
+                style = "second"
+            row_cells.append(fmt_cell(values[row_key][mid]["val"], style=style))
         lines.append(" & ".join(row_cells) + r" \\")
 
     lines.append(r"\bottomrule")
     lines.append(r"\end{tabular}")
+
+    if resize_to_linewidth:
+        lines.append(r"}")  # closes resizebox
+
     lines.append(r"\end{table}")
 
     return "\n".join(lines)
+
+
+
 
 def plot_cv_residual_metrics_era5(model_ids, fold_num, log_path, out_dir, smooth_window=10, data_type="era5", prefix = ''):
     """
@@ -1214,7 +1295,7 @@ def plot_cv_residual_metrics_era5(model_ids, fold_num, log_path, out_dir, smooth
             suffix = model_id_to_name.get(model_name, "")
             ax = fill_in_ax(ax, x, stats2[i], res_str, epochs, pidm_colors[model_name], f"PIDM-{suffix}")
 
-    ax.set_xlabel(f"Epoch{f" (smoothed, window={smooth_window})" if smooth_window>1 else ""}")
+    ax.set_xlabel("Epoch")
     ax.set_ylabel(r"$\mathcal{R}_{\text{MAE}}(\mathbf{x_0}) \sim p_\theta (\mathbf{x_0})$")
     ax.set_title("Validation Sample Residual")
     ax.set_yscale("log")
@@ -1229,8 +1310,7 @@ def plot_cv_residual_metrics_era5(model_ids, fold_num, log_path, out_dir, smooth
             model_name = model_id_2.split('-')[-1].removeprefix(prefix)
             suffix = model_id_to_name.get(model_name, "")
             ax = fill_in_ax(ax, x, stats2[i],"res1", epochs, pidm_colors[model_name], f"PIDM-{suffix}")
-        if smooth_window > 1:
-            ax.set_xlabel(f"Epoch (smoothed, window={smooth_window})")
+        ax.set_xlabel("Epoch")
         ax.set_ylabel(r"$\mathcal{R1}_{\text{MAE}}(\mathbf{x_0}) \sim p_\theta (\mathbf{x_0})$")
         ax.set_title("Planetary Vorticity Sample Residual")
         ax.set_yscale("log")
@@ -1246,8 +1326,7 @@ def plot_cv_residual_metrics_era5(model_ids, fold_num, log_path, out_dir, smooth
             suffix = model_id_to_name.get(model_name, "")
             ax = fill_in_ax(ax, x, stats2[i],"res2", epochs, pidm_colors[model_name], f"PIDM-{suffix}")
 
-    if smooth_window > 1:
-        ax.set_xlabel(f"Epoch (smoothed, window={smooth_window})")
+    ax.set_xlabel("Epoch")
     ax.set_ylabel(r"$\mathcal{R2}_{\text{MAE}}(\mathbf{x_0}) \sim p_\theta (\mathbf{x_0})$")
     ax.set_title("Geostrophic Wind Sample Residual")
     ax.set_yscale("log")
@@ -1284,272 +1363,6 @@ def era5_residuals_plot(model, conditional, model_id, normalize=True):
         residual = res_loss[0].cpu().numpy()
         visualize_era5_sample(residual, res_var, "500", big_data_sample=None, dir=Path("./reports/figures") / model_id / f"residuals")
 
-def era5_models_summary_latex_table(
-    model_ids,
-    fold_num,
-    log_path,
-    smooth_window=10,
-    caption="ERA5 comparison (best epoch; mean across folds)",
-    label="tab:era5_summary",
-    sig_figs=3,
-    wrap_math=True,
-    resize_to_linewidth=True,
-    model_id_to_header=None,
-):
-    """
-    Build a LaTeX table summarizing ERA5 validation metrics across folds.
-
-    NOTE: QGPV is removed (does not exist anymore).
-    We assume ERA5 residual metrics are:
-      - val_era5_planetary_residual(norm)
-      - val_era5_geo_wind_residual(norm)
-    Total residual is their sum.
-
-    Table rows:
-      - Total residual (best)
-      - R_planetary (best)
-      - R_geo_wind (best)
-      - Weighted MSE (best)
-      - Total residual @ best Weighted MSE
-
-    Highlighting:
-      - Best (min) per row: \\boldsymbol{...}
-      - Second best (min) per row: \\underline{...}
-    """
-    import math
-    import numpy as np
-    import pandas as pd
-    from pathlib import Path
-
-    COL_R_PLAN = "val_era5_planetary_residual(norm)"
-    COL_R_GEO  = "val_era5_geo_wind_residual(norm)"
-    COL_WMSE   = "val_mse_(weighted)"
-
-    required_cols = [COL_R_PLAN, COL_R_GEO, COL_WMSE]
-
-    # ---------- mention of R1/R2/R3 ----------
-    # Since QGPV is gone, we relabel as:
-    #   R1 := planetary residual
-    #   R2 := geo wind residual
-    #   total := R1 + R2
-    ROWS = [
-        ("total_best",  r"Total residual $(\mathcal{R}_1+\mathcal{R}_2)$ (best)", "min"),
-        ("r1_best",     r"$\mathcal{R}_1$ (planetary) (best)",                    "min"),
-        ("r2_best",     r"$\mathcal{R}_2$ (geo wind) (best)",                     "min"),
-        ("wmse_best",   r"Weighted MSE (best)",                                   "min"),
-        ("total_at_wmse", r"Total residual @ best Weighted MSE",                  "min"),
-    ]
-
-    # ---------- helpers ----------
-    def moving_average_2d(arr: np.ndarray, window: int) -> np.ndarray:
-        if window <= 1:
-            return arr
-        kernel = np.ones(window) / window
-        return np.apply_along_axis(lambda m: np.convolve(m, kernel, mode="valid"), axis=1, arr=arr)
-
-    def _read_metric_series(df: pd.DataFrame, col: str) -> np.ndarray:
-        if col not in df.columns:
-            return np.array([], dtype=float)
-        return pd.to_numeric(df[col], errors="coerce").dropna().to_numpy(dtype=float)
-
-    def _stack_and_trim(series_list):
-        lengths = [len(s) for s in series_list if s is not None]
-        if len(lengths) == 0 or min(lengths) == 0:
-            return np.empty((0, 0), dtype=float)
-        L = min(lengths)
-        trimmed = [s[:L] for s in series_list]
-        return np.vstack(trimmed)
-
-    def to_latex_sci(x: float, decimals: int = 2) -> str:
-        """
-        LaTeX scientific notation like 1.23\\times 10^{-4},
-        using a FIXED number of decimals (keeps trailing zeros).
-        """
-        if x == 0:
-            return f"{0:.{decimals}f}" if decimals > 0 else "0"
-
-        if not math.isfinite(x):
-            return r"\infty" if x > 0 else (r"-\infty" if x < 0 else r"\mathrm{nan}")
-
-        sign = "-" if x < 0 else ""
-        ax = abs(x)
-
-        exp = int(math.floor(math.log10(ax)))
-        mant = ax / (10 ** exp)
-
-        mant_rounded = round(mant, decimals)
-        if mant_rounded >= 10:
-            mant_rounded /= 10
-            exp += 1
-
-        mant_str = f"{mant_rounded:.{decimals}f}"
-
-        if exp == 0:
-            return f"{sign}{mant_str}"
-
-        # optional: keep clean 10^k formatting
-        if float(mant_str) == 1.0:
-            return f"{sign}10^{{{exp}}}"
-
-        return f"{sign}{mant_str}\\times 10^{{{exp}}}"
-
-    def tex_escape(s: str) -> str:
-        return s.replace("_", r"\_")
-
-    def fmt_cell(val: float, style: str = None) -> str:
-        core = to_latex_sci(float(val), decimals=2)
-        if style == "best":
-            core = r"\boldsymbol{" + core + "}"
-        elif style == "second":
-            core = r"\underline{" + core + "}"
-        return f"${core}$" if wrap_math else core
-
-
-    def read_metrics_csv(run_id: str) -> pd.DataFrame:
-        csv_path = Path(log_path) / run_id / "version_0" / "metrics.csv"
-        if not csv_path.exists():
-            raise FileNotFoundError(f"Missing metrics.csv: {csv_path}")
-        df = pd.read_csv(csv_path)
-        # robust numeric coercion
-        df = df.apply(pd.to_numeric, errors="coerce")
-        if "step" in df.columns:
-            df = df.dropna(subset=["step"]).sort_values("step")
-        return df
-
-    def load_model_mean_series(model_id: str):
-        """
-        Returns dict of mean series (after smoothing) for:
-          - r_plan_mean, r_geo_mean, wmse_mean, total_mean
-        Shapes: [T]
-        """
-        per_col = {c: [] for c in required_cols}
-
-        for fold in range(1, fold_num + 1):
-            run_id = f"{model_id}-{fold}" if fold_num is not None else model_id
-            df = read_metrics_csv(run_id)
-            for c in required_cols:
-                per_col[c].append(_read_metric_series(df, c))
-
-        arr_plan = _stack_and_trim(per_col[COL_R_PLAN])
-        arr_geo  = _stack_and_trim(per_col[COL_R_GEO])
-        arr_wmse = _stack_and_trim(per_col[COL_WMSE])
-
-        if arr_plan.size == 0 or arr_geo.size == 0 or arr_wmse.size == 0:
-            missing = []
-            if arr_plan.size == 0: missing.append(COL_R_PLAN)
-            if arr_geo.size == 0:  missing.append(COL_R_GEO)
-            if arr_wmse.size == 0: missing.append(COL_WMSE)
-            raise ValueError(f"Model '{model_id}' missing/empty columns: {missing}")
-
-        # align across metrics
-        L = min(arr_plan.shape[1], arr_geo.shape[1], arr_wmse.shape[1])
-        arr_plan = arr_plan[:, :L]
-        arr_geo  = arr_geo[:, :L]
-        arr_wmse = arr_wmse[:, :L]
-
-        # smooth
-        arr_plan = moving_average_2d(arr_plan, smooth_window)
-        arr_geo  = moving_average_2d(arr_geo, smooth_window)
-        arr_wmse = moving_average_2d(arr_wmse, smooth_window)
-
-        # means across folds
-        plan_mean = arr_plan.mean(axis=0)
-        geo_mean  = arr_geo.mean(axis=0)
-        wmse_mean = arr_wmse.mean(axis=0)
-        total_mean = plan_mean + geo_mean
-
-        T = min(len(plan_mean), len(geo_mean), len(wmse_mean), len(total_mean))
-        return {
-            "plan_mean": plan_mean[:T],
-            "geo_mean": geo_mean[:T],
-            "wmse_mean": wmse_mean[:T],
-            "total_mean": total_mean[:T],
-            "epochs": T,
-        }
-
-    # ---------- load stats for all models ----------
-    model_series = {mid: load_model_mean_series(mid) for mid in model_ids}
-    common_T = min(model_series[mid]["epochs"] for mid in model_ids)
-
-    # ---------- pick best epoch values per row ----------
-    # values[row_key][mid] = {"val": float, "epoch": int}
-    values = {k: {} for (k, _, _) in ROWS}
-
-    for mid in model_ids:
-        s = model_series[mid]
-        plan = s["plan_mean"][:common_T]
-        geo  = s["geo_mean"][:common_T]
-        wmse = s["wmse_mean"][:common_T]
-        total = s["total_mean"][:common_T]
-
-        i_total = int(np.argmin(total))
-        i_plan  = int(np.argmin(plan))
-        i_geo   = int(np.argmin(geo))
-        i_wmse  = int(np.argmin(wmse))
-
-        values["total_best"][mid] = {"val": float(total[i_total]), "epoch": i_total}
-        values["r1_best"][mid]    = {"val": float(plan[i_plan]),   "epoch": i_plan}
-        values["r2_best"][mid]    = {"val": float(geo[i_geo]),     "epoch": i_geo}
-        values["wmse_best"][mid]  = {"val": float(wmse[i_wmse]),   "epoch": i_wmse}
-        values["total_at_wmse"][mid] = {"val": float(total[i_wmse]), "epoch": i_wmse}
-
-    # ---------- determine best + second-best model per row ----------
-    best_and_second = {}
-    for (row_key, _, direction) in ROWS:
-        items = [(mid, values[row_key][mid]["val"]) for mid in model_ids]
-        items_sorted = sorted(items, key=lambda x: x[1], reverse=(direction == "max"))
-        best_mid = items_sorted[0][0] if len(items_sorted) > 0 else None
-        second_mid = items_sorted[1][0] if len(items_sorted) > 1 else None
-        best_and_second[row_key] = (best_mid, second_mid)
-
-    # ---------- header names ----------
-    if model_id_to_header is None:
-        # default: show escaped model ids
-        headers = {mid: tex_escape(mid) for mid in model_ids}
-    else:
-        # user-supplied pretty names (already LaTeX-ready ideally)
-        headers = {mid: model_id_to_header.get(mid, tex_escape(mid)) for mid in model_ids}
-
-    # ---------- build LaTeX ----------
-    ncols = 1 + len(model_ids)
-    colspec = "l" + "c" * len(model_ids)
-
-    lines = []
-    lines.append(r"\begin{table}[H]")
-    lines.append(r"\centering")
-    lines.append(r"\caption{" + caption + r"}")
-    lines.append(r"\label{" + label + r"}")
-
-    if resize_to_linewidth:
-        lines.append(r"\resizebox{\linewidth}{!}{%")
-
-    lines.append(r"\begin{tabular}{" + colspec + r"}")
-    lines.append(r"\toprule")
-    lines.append("Metric & " + " & ".join(headers[mid] for mid in model_ids) + r" \\")
-    lines.append(r"\midrule")
-
-    for (row_key, row_label, _) in ROWS:
-        best_mid, second_mid = best_and_second[row_key]
-        row_cells = [row_label]
-        for mid in model_ids:
-            style = None
-            if mid == best_mid:
-                style = "best"
-            elif mid == second_mid:
-                style = "second"
-            row_cells.append(fmt_cell(values[row_key][mid]["val"], style=style))
-        lines.append(" & ".join(row_cells) + r" \\")
-
-    lines.append(r"\bottomrule")
-    lines.append(r"\end{tabular}")
-
-    if resize_to_linewidth:
-        lines.append(r"}")  # closes resizebox
-
-    lines.append(r"\end{table}")
-
-    return "\n".join(lines)
-
 
 if __name__ == "__main__":
     from pde_diff.utils import DatasetRegistry, LossRegistry
@@ -1568,11 +1381,12 @@ if __name__ == "__main__":
         model_path = Path('./models')
         #'era5_cleanhp_50e-c1e3'
         model_ids = ['era5_clean_hp3-mbaseline', 'era5_clean_hp3-ne_c1e3','era5_clean_hp3-ne_c1e2', 'era5_clean_hp3-ne_c1e1']
+        # model_ids = ['era5_clean_hp3-mbaseline', 'era5_clean_hp3-ne_c1e2','era5_clean_hp3-c1e2_pv', 'era5_clean_hp3-c1e2_gw']
         #plot_and_save_era5(f"logs/era5_baseline-v2-1/version_0/metrics.csv", Path(f"reports/figures/{model_id}"))
 
         plot_cv_val_metrics(
             model_ids=model_ids,
-            fold_num=4,
+            fold_num=5,
             log_path="logs",
             out_dir=f"reports/figures/era5_baseline_comparisons",
             smooth_window=1,
@@ -1601,7 +1415,8 @@ if __name__ == "__main__":
 
     if plot_era5_individual_var_mse:
         model_path = Path('./models')
-        model_ids = ['era5_clean_hp3-mbaseline', 'era5_clean_hp3-ne_c1e3','era5_clean_hp3-ne_c1e2', 'era5_clean_hp3-ne_c1e1']
+        # model_ids = ['era5_clean_hp3-mbaseline', 'era5_clean_hp3-ne_c1e3','era5_clean_hp3-ne_c1e2', 'era5_clean_hp3-ne_c1e1']
+        model_ids = ['era5_clean_hp3-mbaseline', 'era5_clean_hp3-ne_c1e2','era5_clean_hp3-c1e2_pv', 'era5_clean_hp3-c1e2_gw']
         #plot_and_save_era5(f"logs/era5_baseline-v2-1/version_0/metrics.csv", Path(f"reports/figures/{model_id}"))
 
         plot_cv_individual_val_metrics(
@@ -1614,7 +1429,8 @@ if __name__ == "__main__":
         )
     if plot_era5_residual_metrics:
         model_path = Path('./models')
-        model_ids = ['era5_clean_hp3-mbaseline', 'era5_clean_hp3-ne_c1e3','era5_clean_hp3-ne_c1e2', 'era5_clean_hp3-ne_c1e1']
+        # model_ids = ['era5_clean_hp3-mbaseline', 'era5_clean_hp3-ne_c1e3','era5_clean_hp3-ne_c1e2', 'era5_clean_hp3-ne_c1e1']
+        model_ids = ['era5_clean_hp3-mbaseline', 'era5_clean_hp3-ne_c1e2','era5_clean_hp3-c1e2_pv', 'era5_clean_hp3-c1e2_gw']
         #plot_and_save_era5(f"logs/era5_baseline-v2-1/version_0/metrics.csv", Path(f"reports/figures/{model_id}"))
 
         plot_cv_residual_metrics_era5(
@@ -1628,8 +1444,8 @@ if __name__ == "__main__":
 
     if plot_darcy:
         model_path = Path('./models')
-        model_id = 'era5_cleanhp_50e-bqlmk'
-        model_id_2 = 'era5_cleanhp_50e-hgrnf'
+        model_id = 'exp1-aaaaa'
+        model_id_2 = 'exp1-aaaab'
         # cfg = OmegaConf.load(model_path / (model_id) / "config.yaml")
         # diffusion_model = DiffusionModel(cfg)
         # diffusion_model.load_model(model_path / model_id / f"best-val_loss-weights.pt")
@@ -1644,6 +1460,7 @@ if __name__ == "__main__":
             smooth_window=20,
         )
         breakpoint()
+        
 
         cfg = OmegaConf.load(model_path / model_id / "config.yaml")
         dataset = DatasetRegistry.create(cfg.dataset)
@@ -1666,20 +1483,20 @@ if __name__ == "__main__":
     if era5_latex:
         model_ids = [
             "era5_clean_hp3-mbaseline",
-            "era5_clean_hp3-ne_c1e3",
+            # "era5_clean_hp3-ne_c1e3",
             "era5_clean_hp3-ne_c1e2",
-            "era5_clean_hp3-ne_c1e1",
-            # "era5_clean_hp3-c1e2_gw",
-            # "era5_clean_hp3-c1e2_pv",
+            # "era5_clean_hp3-ne_c1e1",
+            "era5_clean_hp3-c1e2_pv",
+            "era5_clean_hp3-c1e2_gw",
         ]
 
         pretty = {
-            "era5_clean_hp3-mbaseline": r"Baseline",
-            "era5_clean_hp3-ne_c1e3": r"$c=10^{-3}$",
+            "era5_clean_hp3-mbaseline": r"Baseline (DDPM)",
+            # "era5_clean_hp3-ne_c1e3": r"$c=10^{-3}$",
             "era5_clean_hp3-ne_c1e2": r"$c=10^{-2}$",
-            "era5_clean_hp3-ne_c1e1": r"$c=10^{-1}$",
-            # "era5_clean_hp3-c1e2_pv": r"$\mathcal{R}_1$: $c=10^{-2}$",
-            # "era5_clean_hp3-c1e2_gw": r"$\mathcal{R}_2$: $c=10^{-2}$",
+            # "era5_clean_hp3-ne_c1e1": r"$c=10^{-1}$",
+            "era5_clean_hp3-c1e2_pv": r"$\mathcal{R}_1$: $c=10^{-2}$",
+            "era5_clean_hp3-c1e2_gw": r"$\mathcal{R}_2$: $c=10^{-2}$",
         }
 
         latex = era5_models_summary_latex_table(
