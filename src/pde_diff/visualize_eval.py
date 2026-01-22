@@ -102,14 +102,14 @@ def plot_sample_target_absdiff_stacked(
 
     plt.colorbar(im1, cax=cax_top,label=f"{VAR_UNITS.get(variable, variable)}")
 
-    diff = target - sample
+    diff = np.abs(target - sample)
     im3 = ax3.imshow(
         diff.T,
-        cmap="PuOr",
+        cmap="Oranges",
         extent=EXTENT_SUBSET,
         aspect="auto",
     )
-    ax3.set_title(f"Difference of {VAR_NAMES.get(variable, variable)} " +r"$(x_0-\hat{x}_0)$")
+    ax3.set_title(f"MAE of {VAR_NAMES.get(variable, variable)} " +r"$|x_0-\hat{x}_0|$")
     ax3.set_xlim(EXTENT_SUBSET[0], EXTENT_SUBSET[1])
     ax3.set_ylim(EXTENT_SUBSET[2],EXTENT_SUBSET[3])
     print(f"Max absolute difference for variable {variable}, sample {sample_idx}: {diff.max():.4f}")
@@ -151,7 +151,7 @@ def plot_forecasts_vs_targets(
         t.detach().cpu().numpy() if hasattr(t, "detach") else t
         for t in targets
     ]
-    differences = [t-f for f, t in zip(forecasts, targets)]
+    differences = [np.abs(t-f) for f, t in zip(forecasts, targets)]
 
     # Shared color scale
     vmin = min(f.min() for f in forecasts + targets)
@@ -190,7 +190,7 @@ def plot_forecasts_vs_targets(
 
         im = ax_f.imshow(forecasts[i].T,cmap=cmap,vmin=vmin,vmax=vmax,aspect="auto",extent=EXTENT_SUBSET,)
         ax_t.imshow(targets[i].T, cmap=cmap,vmin=vmin,vmax=vmax,aspect="auto",extent=EXTENT_SUBSET,)
-        im_diff = ax_d.imshow(differences[i].T,vmin=vmin_d,vmax=vmax_d, cmap="PuOr",aspect="auto",extent=EXTENT_SUBSET,)
+        im_diff = ax_d.imshow(differences[i].T,vmin=vmin_d,vmax=vmax_d, cmap="Oranges",aspect="auto",extent=EXTENT_SUBSET,)
 
         for axs in [ax_f, ax_t, ax_d]:
             axs.set_xlim(EXTENT_SUBSET[0], EXTENT_SUBSET[1])
@@ -208,10 +208,10 @@ def plot_forecasts_vs_targets(
     axes_forecast[0].set_title(f"Forecasts of {VAR_NAMES.get(variable, variable)}")
     if states:
         axes_target[0].set_title(f"True states of {VAR_NAMES.get(variable, variable)}")
+        axes_diff[0].set_title(r"MAE, $|x_0-\hat{x}_0|$")
     else:
         axes_target[0].set_title(f"True changes of {VAR_NAMES.get(variable, variable)}")
-
-    axes_diff[0].set_title(r"Difference $(x_0-\hat{x}_0)$")
+        axes_diff[0].set_title(r"MAE, $|\Delta x_0- \Delta \hat{x}_0|$")
 
     cax = fig.add_subplot(gs[:, 2])
     cbar = plt.colorbar(im, cax=cax)

@@ -151,14 +151,11 @@ def evaluate_forecasting(model: DiffusionModel, dataset_test: Dataset, steps: in
                             persistent_workers=True,
                             )
     vor_loss = model.loss_fn
-    print(model.device)
-    print(model.loss_fn.std.device)
-
     vor_loss.set_mean_and_std(dataset_test.means, dataset_test.stds, dataset_test.diff_means, dataset_test.diff_stds)
     loss_fns = {"mse": LossRegistry.create(OmegaConf.create({"name":"mse"})) ,
                 "residual": model.loss_fn}
 
-    losses = ["mse", "val_era5_sampled_planetary_residual(norm)", "val_era5_sampled_geo_wind_residual(norm)", "val_era5_sampled_qgpv_residual(norm)"]
+    losses = ["mse", "val_era5_sampled_planetary_residual(norm)", "val_era5_sampled_geo_wind_residual(norm)"]
     loss = {loss: {str(i+1): [] for i in range(steps)} for loss in losses}
 
     var_names = ["u", "v", "pv", "t", "z"]
@@ -186,13 +183,10 @@ def evaluate_forecasting(model: DiffusionModel, dataset_test: Dataset, steps: in
                 loss_geo_wind = loss_fn.compute_residual_geostrophic_wind(x0_previous=prev_states, x0_change_pred=forecasted_changes, normalize=True).abs()
                 mean_loss_geo_wind = loss_geo_wind.mean(dim=(1, 2, 3))
                 loss_planetary = loss_fn.compute_residual_planetary_vorticity(x0_previous=prev_states, x0_change_pred=forecasted_changes, normalize=True).abs()
-                mean_loss_planetary = loss_planetary.mean(dim=(1, 2, 3))
-                loss_qgpv = loss_fn.compute_residual_qgpv(x0_previous=prev_states, x0_change_pred=forecasted_changes, normalize=True).abs()
-                mean_loss_qgpv = loss_qgpv.mean(dim=(1, 2))
+                mean_loss_planetary = loss_planetary.mean(dim=(1, 2))
                 for k in range(steps):
                     loss["val_era5_sampled_planetary_residual(norm)"][str(k+1)].append(mean_loss_planetary[k].item())
                     loss["val_era5_sampled_geo_wind_residual(norm)"][str(k+1)].append(mean_loss_geo_wind[k].item())
-                    loss["val_era5_sampled_qgpv_residual(norm)"][str(k+1)].append(mean_loss_qgpv[k].item())
 
         targets_rearranged = ein.rearrange(targets, "b (lev var) lon lat -> b lev var lon lat", lev = 3)
         forecasted_changes_rearranged = ein.rearrange(forecasted_changes, "b (lev var) lon lat -> b lev var lon lat", lev = 3)
@@ -212,11 +206,9 @@ def evaluate_forecasting(model: DiffusionModel, dataset_test: Dataset, steps: in
             ### Plot residual errors:
             loss_geo_wind_target = loss_fn.compute_residual_geostrophic_wind(x0_previous=prev_states_true, x0_change_pred=targets, normalize=True).abs()
             loss_planetary_target = loss_fn.compute_residual_planetary_vorticity(x0_previous=prev_states_true, x0_change_pred=targets, normalize=True).abs()
-            loss_qgpv_target = loss_fn.compute_residual_qgpv(x0_previous=prev_states_true, x0_change_pred=targets, normalize=True).abs()
 
             plot_residuals_with_truth(loss_geo_wind[0,lvl],loss_geo_wind_target[0,lvl],"gw",sample_idx=0, dir=dir_sample)
-            plot_residuals_with_truth(loss_planetary[0,lvl],loss_planetary_target[0,lvl],"plan", sample_idx=0,dir=dir_sample)
-            plot_residuals_with_truth(loss_qgpv[0],loss_qgpv_target[0],"qgpv", sample_idx=0, dir=dir_sample)
+            plot_residuals_with_truth(loss_planetary[0],loss_planetary_target[0],"plan", sample_idx=0,dir=dir_sample)
 
             conditionals_rearranged = ein.rearrange(conditionals, "b (state var) lon lat -> b state var lon lat", state = 2)
             un_norm_cond = dataset_test._unnormalize(conditionals_rearranged[:,1,:15].detach().cpu(), dataset_test.means, dataset_test.stds)

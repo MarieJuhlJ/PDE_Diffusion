@@ -33,7 +33,7 @@ VAR_NAMES = {
     "v": "v",
     "t": "T",
     "z": r"$\Phi$",
-    "pv": "q",
+    "pv": r"$q_E$",
 }
 
 VAR_UNITS = {
@@ -41,7 +41,7 @@ VAR_UNITS = {
     "v": r"$m \cdot s^{-1}$",
     "t": r"$K$",
     "z": r"$m^2 \cdot s^{-2}$",
-    "pv": r"$s^{-1}$",
+    "pv": r"$K\cdot m^2 \cdot kg^{-1} \cdot s^{-1}$",
 }
 
 colors = ["brown", "white", "teal"]  # Transition from blue to white to red
@@ -1391,11 +1391,11 @@ if __name__ == "__main__":
     plot_era5_residual = False
     plot_era5_residual_metrics = False
     plot_era5_individual_var_mse = False
-    era5_latex = False
+    era5_latex = True
     plot_darcy_sample = False
 
     model_path = Path('./models')
-    model_ids = ['era5_clean_hp3-baseline-retrain-retrain','era5_clean_hp3-c1e2_pv-retrain']
+    model_ids = ['era5_clean_hp3-baseline-retrain-retrain','era5_clean_hp3-c1e2_pv-retrain-retrain']
 
     if plot_era5_training:
         # PLOT ERA 5 LOSS:
@@ -1489,6 +1489,8 @@ if __name__ == "__main__":
             "era5_clean_hp3-ne_c1e3": r"$c=10^{-3}$",
             "era5_clean_hp3-c1e2_pv": r"$\mathcal{R}_1$: $c=10^{-2}$",
             "era5_clean_hp3-c1e2_gw": r"$\mathcal{R}_2$: $c=10^{-2}$",
+            'era5_clean_hp3-baseline-retrain-retrain': r"Baseline (Extended training)",
+            'era5_clean_hp3-c1e2_pv-retrain-retrain': r"$\mathcal{R}_1$: $c=10^{-2}$ (Extended training)"
         }
 
         latex = era5_models_summary_latex_table(
