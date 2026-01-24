@@ -3,6 +3,7 @@ from pathlib import Path
 import yaml
 
 from matplotlib.colors import LinearSegmentedColormap, LogNorm
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import matplotlib.font_manager as fm
@@ -22,6 +23,7 @@ fm.fontManager.addfont(font_path)
 plt.rcParams['font.family'] = 'Times New Roman'
 
 plt.style.use("pde_diff.custom_style")
+mpl.rcParams["mathtext.default"] = "regular"
 
 # Used for plotting samples:
 EXTENT_FULL = [0.0, 359.25, 90.0, -90.0]
@@ -1387,11 +1389,11 @@ if __name__ == "__main__":
     from pde_diff.utils import DatasetRegistry, LossRegistry
     plot_darcy = False
     plot_data_samples = False
-    plot_era5_training = False
+    plot_era5_training = True
     plot_era5_residual = False
-    plot_era5_residual_metrics = False
-    plot_era5_individual_var_mse = False
-    era5_latex = True
+    plot_era5_residual_metrics = True
+    plot_era5_individual_var_mse = True
+    era5_latex = False
     plot_darcy_sample = False
 
     model_path = Path('./models')

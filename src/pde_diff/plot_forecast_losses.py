@@ -75,12 +75,13 @@ def load_loss_from_csv(csv_path):
 def plot_csv_loss(csv_paths,model_ids,loss_name, out_path: Optional[str] = None) -> str:
 
     plt.figure(figsize=(3, 2.5))
+    colors = ["#8800FF", "#BF0251"]
 
-    for csv_path, model_id in zip(csv_paths,model_ids):
+    for k, (csv_path, model_id) in enumerate(zip(csv_paths,model_ids)):
         cols_sorted, mean, confidence = load_loss_from_csv(csv_path)
 
-        plt.plot(range(1, len(cols_sorted) + 1), mean.values,'o-', label=f"{model_id} - mean")
-        plt.fill_between(range(1, len(cols_sorted) + 1), (mean - confidence).values, (mean + confidence).values, alpha=0.3)
+        plt.plot(range(1, len(cols_sorted) + 1), mean.values,'o-', label=f"{model_id} - mean", color=colors[k])
+        plt.fill_between(range(1, len(cols_sorted) + 1), (mean - confidence).values, (mean + confidence).values, alpha=0.3,color=colors[k])
     error ="MSE" if loss_name=="mse" else r"$\mathcal{R}_1$ MAE"
     plt.xlabel("Forecast step")
     plt.ylabel(f"{error}")
