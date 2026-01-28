@@ -44,25 +44,23 @@ if __name__ == "__main__":
     stats = {
         "geostrophic_wind": {"count": 0, "sum": 0.0, "sumsq": 0.0},
         "planetary_vorticity": {"count": 0, "sum": 0.0, "sumsq": 0.0},
-        "qgpv": {"count": 0, "sum": 0.0, "sumsq": 0.0},
     }
 
     with torch.no_grad():
         for data in tqdm(dataset, desc="Processing dataset"):
-            prev_np, curr_np = data[0][None, 19:34], data[1][None, :]
+            num_vars = (data[0].shape[0] - 8) // 6
+            prev_np, curr_np = data[0][None, num_vars*3+4:-4], data[1][None, :]
 
             prev = to_tensor(prev_np, device)
             curr = to_tensor(curr_np, device)
 
             r_gw = loss_fn.compute_residual_geostrophic_wind(prev, curr, normalize=False)
             r_pv = loss_fn.compute_residual_planetary_vorticity(prev, curr, normalize=False)
-            r_qg = loss_fn.compute_residual_qgpv(prev, curr, normalize=False)
 
             update_stats(r_gw, stats["geostrophic_wind"])
             update_stats(r_pv, stats["planetary_vorticity"])
-            update_stats(r_qg, stats["qgpv"])
 
-            del prev, curr, r_gw, r_pv, r_qg
+            del prev, curr, r_gw, r_pv
 
     results = {}
     for key, s in stats.items():

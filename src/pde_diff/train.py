@@ -54,7 +54,8 @@ def train(cfg: DictConfig):
         batch_size = 32
 
     train_dataloader = DataLoader(dataset_train, batch_size=batch_size, shuffle=True, num_workers=4,persistent_workers=True, worker_init_fn=worker_init_fn)
-    val_dataloader = DataLoader(dataset_val, batch_size=batch_size, shuffle=False, num_workers=4,persistent_workers=True, worker_init_fn=worker_init_fn)
+    if dataset_val:
+        val_dataloader = DataLoader(dataset_val, batch_size=batch_size, shuffle=False, num_workers=4,persistent_workers=True, worker_init_fn=worker_init_fn)
     
     wandb_name = f"{cfg.experiment.name}-{cfg.id}"
 
@@ -77,7 +78,10 @@ def train(cfg: DictConfig):
     )
 
     print(f"Starting training of model {cfg.id}")
-    trainer.fit(model, train_dataloader, val_dataloader)
+    if dataset_val:
+        trainer.fit(model, train_dataloader, val_dataloader)
+    else:
+        trainer.fit(model, train_dataloader)
     print(f"Training completed of model {cfg.id}")
 
 def worker_init_fn(worker_id):

@@ -5,10 +5,16 @@ from pde_diff.loss import VorticityLoss
 from tqdm import tqdm
 from omegaconf import OmegaConf
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import numpy as np
 import os
 
+font_path = "./times.ttf"
+fm.fontManager.addfont(font_path)
+plt.rcParams['font.family'] = 'Times New Roman'
+
 plt.style.use("pde_diff.custom_style")
+
 
 def to_tensor(x, device):
     # Handles numpy arrays or already-a-tensor
@@ -62,17 +68,20 @@ if __name__ == "__main__":
         hist_data = {
             "geostrophic_wind": [],
             "planetary_vorticity": [],
-            "qgpv": [],
         }
         hist_data_noise = {
             "geostrophic_wind_noise": [],
             "planetary_vorticity_noise": [],
-            "qgpv_noise": [],
+        }
+        relative_wind_hist = {
+            "geostrophic_wind_relative_error_u": [],
+            "geostrophic_wind_relative_error_v": []
         }
 
         with torch.no_grad():
             for data in tqdm(dataset, desc="Processing dataset"):
-                prev_np, curr_np = data[0][None, 19:34], data[1][None, :]
+                num_vars = (data[0].shape[0] - 8) // 6
+                prev_np, curr_np = data[0][None, num_vars*3+4:-4], data[1][None, :]
 
                 prev = to_tensor(prev_np, device)
                 curr = to_tensor(curr_np, device)
@@ -82,30 +91,30 @@ if __name__ == "__main__":
                 # Compute residuals (NOT normalized)
                 r_gw = loss_fn.compute_residual_geostrophic_wind(prev, curr, normalize=False)
                 r_pv = loss_fn.compute_residual_planetary_vorticity(prev, curr, normalize=False)
-                r_qg = loss_fn.compute_residual_qgpv(prev, curr, normalize=False)
+                rel_gw = loss_fn.compute_residual_geostrophic_wind(prev, curr, normalize=False, relative=True)
 
                 # Compute residuals with noise (NOT normalized)
-                r_gw_noise = loss_fn.compute_residual_geostrophic_wind(prev, curr, normalize=False)
-                r_pv_noise = loss_fn.compute_residual_planetary_vorticity(prev, curr, normalize=False)
-                r_qg_noise = loss_fn.compute_residual_qgpv(prev, curr, normalize=False)
+                # use noisy prev/curr to inspect effect of noise
+                r_gw_noise = loss_fn.compute_residual_geostrophic_wind(prev_noise, curr_noise, normalize=False)
+                r_pv_noise = loss_fn.compute_residual_planetary_vorticity(prev_noise, curr_noise, normalize=False)
 
                 append_hist(r_gw, hist_data["geostrophic_wind"], MAX_SAMPLES)
                 append_hist(r_pv, hist_data["planetary_vorticity"], MAX_SAMPLES)
-                append_hist(r_qg, hist_data["qgpv"], MAX_SAMPLES)
+
+                append_hist(rel_gw[0],relative_wind_hist["geostrophic_wind_relative_error_u"],MAX_SAMPLES)
+                append_hist(rel_gw[1],relative_wind_hist["geostrophic_wind_relative_error_v"],MAX_SAMPLES)
 
                 append_hist(r_gw_noise, hist_data_noise["geostrophic_wind_noise"], MAX_SAMPLES)
                 append_hist(r_pv_noise, hist_data_noise["planetary_vorticity_noise"], MAX_SAMPLES)
-                append_hist(r_qg_noise, hist_data_noise["qgpv_noise"], MAX_SAMPLES)
 
-                del prev, curr, r_gw, r_pv, r_qg, prev_noise, curr_noise, r_gw_noise, r_pv_noise, r_qg_noise
+                del prev, curr, r_gw, r_pv, prev_noise, curr_noise, r_gw_noise, r_pv_noise
 
-        # --- Plot 3 histograms side-by-side (counts, not normalized) ---
-        fig, axes = plt.subplots(1, 3, figsize=(15, 4), sharey=True)
+        # --- Plot 2 histograms side-by-side (counts, not normalized) ---
+        fig, axes = plt.subplots(1, 2, figsize=(8, 2.5), sharey=True)
 
         plots = [
-            ("qgpv", r"\mathcal{R}_1 QGPV Residual"),
-            ("planetary_vorticity", r"\mathcal{R}_2 Planetary Vorticity Residual"),
-            ("geostrophic_wind", r"\mathcal{R}_3 Geostrophic Wind Residual"),
+            ("planetary_vorticity", r"$\mathcal{R}_1$ Planetary Vorticity Residual"),
+            ("geostrophic_wind", r"$\mathcal{R}_2$ Geostrophic Wind Residual"),
         ]
 
         for ax, (key, title) in zip(axes, plots):
@@ -113,6 +122,7 @@ if __name__ == "__main__":
 
             mean = data.mean()
             std = data.std()
+            col = "#1A4DAC"
 
             # Robust x-limits to avoid extreme tails dominating
             lo, hi = np.percentile(data, [0.5, 99.5])
@@ -126,12 +136,13 @@ if __name__ == "__main__":
                 alpha=0.6,
                 edgecolor="black",
                 linewidth=0.8,
+                color=col,
             )
 
             # Mean and std lines
-            ax.axvline(mean, linestyle="-", linewidth=2, label="Mean")
-            ax.axvline(mean - std, linestyle="--", linewidth=1.5, label="±1 Std")
-            ax.axvline(mean + std, linestyle="--", linewidth=1.5)
+            ax.axvline(mean, linestyle="-", linewidth=2, label="Mean",color=col)
+            ax.axvline(mean - std, linestyle="--", linewidth=1.5, label="±1 Std",color=col)
+            ax.axvline(mean + std, linestyle="--", linewidth=1.5,color=col)
 
             # Annotation box
             textstr = (
@@ -161,20 +172,83 @@ if __name__ == "__main__":
         plt.savefig("reports/figures/era5_residual_histograms.png", dpi=300)
         print("Saved histogram figure to reports/figures/era5_residual_histograms.png")
 
-        # --- Plot 3 histograms side-by-side (counts, not normalized) ---
-        fig, axes = plt.subplots(1, 3, figsize=(15, 4), sharey=True)
-
+        fig, axes = plt.subplots(1, 2, figsize=(8, 2.5), sharey=True)
         plots = [
-            ("qgpv_noise", r"\mathcal{R}_1 QGPV Residual Noise"),
-            ("planetary_vorticity_noise", r"\mathcal{R}_2 Planetary Vorticity Residual Noise"),
-            ("geostrophic_wind", r"\mathcal{R}_3 Geostrophic Wind Residual Noise"),
+            ("geostrophic_wind_relative_error_u", r"$\mathcal{R}_2$ Relative Residual, u component"),
+            ("geostrophic_wind_relative_error_v", r"$\mathcal{R}_2$ Relative Residual, v component"),
         ]
 
         for ax, (key, title) in zip(axes, plots):
-            data = np.asarray(hist_data[key])
+            data = np.asarray(relative_wind_hist[key])
 
             mean = data.mean()
             std = data.std()
+            col = "#2A9D8F"
+            
+            # Robust x-limits to avoid extreme tails dominating
+            lo, hi = np.percentile(data, [0.5, 99.5])
+            mean = data[(data>lo)&(data<hi)].mean()
+            std = data[(data>lo)&(data<hi)].std()
+
+            # Histogram
+            ax.hist(
+                data,
+                bins=120,
+                range=(lo, hi),
+                histtype="stepfilled",
+                alpha=0.6,
+                edgecolor="black",
+                linewidth=0.8,
+                color=col,
+            )
+
+            # Mean and std lines
+            ax.axvline(mean, linestyle="-", linewidth=2, label="Mean",color=col)
+            ax.axvline(mean - std, linestyle="--", linewidth=1.5, label="±1 Std",color=col)
+            ax.axvline(mean + std, linestyle="--", linewidth=1.5,color=col)
+
+            # Annotation box
+            textstr = (
+                f"Mean = {mean:.3e}\n"
+                f"Std  = {std:.3e}"
+            )
+            ax.text(
+                0.97,
+                0.97,
+                textstr,
+                transform=ax.transAxes,
+                fontsize=10,
+                verticalalignment="top",
+                horizontalalignment="right",
+                bbox=dict(boxstyle="round", facecolor="white", alpha=0.9),
+            )
+
+            ax.set_title(title, fontsize=12)
+            ax.set_xlabel("Residual value")
+            ax.set_xlim(lo, hi)
+
+            ax.grid(True, linestyle=":", alpha=0.6)
+
+        axes[0].set_ylabel("Count")
+
+        plt.tight_layout()
+        plt.savefig("reports/figures/era5_relative_geo_wind_residual_histograms.png", dpi=300)
+        print("Saved histogram figure to reports/figures/era5_relative_geo_wind_residual_histograms.png")
+
+        # --- Plot 2 histograms side-by-side for noise (counts, not normalized) ---
+        fig, axes = plt.subplots(1, 2, figsize=(8, 2.5), sharey=True)
+
+        plots = [
+            ("planetary_vorticity_noise", r"$\mathcal{R}_1$ Planetary Vorticity Residual on Noise"),
+            ("geostrophic_wind_noise", r"$\mathcal{R}_2$ Geostrophic Wind Residual on Noise"),
+        ]
+
+        for ax, (key, title) in zip(axes, plots):
+            data = np.asarray(hist_data_noise[key])
+
+            mean = data.mean()
+            std = data.std()
+            col = "#E76F51"
 
             # Robust x-limits to avoid extreme tails dominating
             lo, hi = np.percentile(data, [0.5, 99.5])
@@ -188,12 +262,13 @@ if __name__ == "__main__":
                 alpha=0.6,
                 edgecolor="black",
                 linewidth=0.8,
+                color=col
             )
 
             # Mean and std lines
-            ax.axvline(mean, linestyle="-", linewidth=2, label="Mean")
-            ax.axvline(mean - std, linestyle="--", linewidth=1.5, label="±1 Std")
-            ax.axvline(mean + std, linestyle="--", linewidth=1.5)
+            ax.axvline(mean, linestyle="-", linewidth=2, label="Mean",color=col)
+            ax.axvline(mean - std, linestyle="--", linewidth=1.5, label="±1 Std",color=col)
+            ax.axvline(mean + std, linestyle="--", linewidth=1.5,color=col)
 
             # Annotation box
             textstr = (

@@ -74,63 +74,64 @@ def load_loss_from_csv(csv_path):
 
 def plot_csv_loss(csv_paths,model_ids,loss_name, out_path: Optional[str] = None) -> str:
 
-    plt.figure(figsize=(8, 5))
+    plt.figure(figsize=(3, 2.5))
+    colors = ["#8800FF", "#BF0251"]
 
-    for csv_path, model_id in zip(csv_paths,model_ids):
+    for k, (csv_path, model_id) in enumerate(zip(csv_paths,model_ids)):
         cols_sorted, mean, confidence = load_loss_from_csv(csv_path)
-        plt.plot(range(1, len(cols_sorted) + 1), mean.values, label=f"Mean - {model_id}")
-        plt.fill_between(range(1, len(cols_sorted) + 1), (mean - confidence).values, (mean + confidence).values, alpha=0.3)
+        print(f"Mean: {mean.values[0]}, CI: {confidence.values[0]} for model {model_id}")
 
-    plt.xlabel("Forecast step")
-    plt.ylabel(f"{loss_name} Loss")
-    plt.title(f"Forecast loss vs forecast steps ({loss_name})")
+        plt.plot(range(1, len(cols_sorted) + 1), mean.values,'o-', label=f"{model_id} - mean", color=colors[k])
+        plt.fill_between(range(1, len(cols_sorted) + 1), (mean - confidence).values, (mean + confidence).values, alpha=0.3,color=colors[k])
+    error_names = {
+        "geo_wind": ("Geo. Wind", r"$\mathcal{R}_{2,MAE}(\tilde{x}_0)$"),
+        "planetary": ("Plan. Vort.", r"$\mathcal{R}_{1,MAE}(\tilde{x}_0)$"),
+        "mse": ("MSE of states", r"$||x_0-\tilde{x}_0||^2$"),
+        "mse_change": ("MSE of change", r"$||\Delta x_0-\Delta \tilde{x}_0||^2$"),  }
+
+    error = error_names.get(loss_name, loss_name)
+    plt.xlabel("Forecast horizon (in hours)")
+    plt.ylabel(f"{error[1]}")
+    plt.title(f"{error[0]} (OOD Dec 2024)")
     plt.xticks(range(1, len(cols_sorted) + 1))
     plt.legend()
     plt.tight_layout()
 
     if out_path is None:
-        out_path = os.path.join(os.path.dirname(csv_path), f"forecast_loss_vs_steps_{loss_name}.png")
+        out_path = os.path.join(os.path.dirname(csv_path), f"comb_forecast_loss_vs_steps_{loss_name}.png")
 
     plt.savefig(out_path)
     plt.close()
     print(f"Saved plot to {out_path}")
     return out_path
 
-
-
 def main():
     parser = argparse.ArgumentParser(description="Plot forecast losses for given model ids")
-    parser.add_argument("models", nargs="+", help="Model ids (folders inside `models/`)")
+    #parser.add_argument("models", nargs="+", help="Model ids (folders inside `models/`)")
     parser.add_argument("--models-dir", default="models", help="Directory where model folders live")
     parser.add_argument("--logs-dir", default="logs", help="Directory where logs are stored")
     parser.add_argument("--evaluate-script", default="src/pde_diff/evaluate.py", help="Path to evaluate script")
     parser.add_argument("--no-run", action="store_true", help="Do not run evaluate if CSVs are missing; just skip")
     args = parser.parse_args()
 
-    for model_id in args.models:
-        print(f"Processing model: {model_id}")
-        best_fold= find_best_fold("models/"+model_id)
-        print(f"Best fold: {best_fold[0]} with val loss {best_fold[1]}")
-        model_eval_dir = best_fold[0] +"_eval"
+    models=["DDPM", r"PIDM-$\mathcal{R}_1$: c=1e-2"]
+
+    #for model_id in models:
+    #    print(f"Processing model: {model_id}")
+    #    best_fold= find_best_fold("models/"+model_id)
+    #    print(f"Best fold: {best_fold[0]} with val loss {best_fold[1]}")
+    #    model_eval_dir = best_fold[0] +"_eval"
         #csv_files = get_csvs_for_model(model_eval_dir, models_dir=args.models_dir, logs_dir=args.logs_dir, evaluate_script=args.evaluate_script, no_run=args.no_run)
 
-        loss_names = ["mse", "geo_wind", "planetary","qgpv"]
-        csv_paths_loss_sorted = {loss:[] for loss in loss_names}
-
-        csv_paths_loss_sorted = {
-            "mse": ["logs/era5_cleanhp_50e_baseline_eval/forecasting_losses_mse.csv","logs/era5_cleanhp_50e_c1e2-4_eval/forecasting_losses_mse.csv"],
-            "geo_wind": ["logs/era5_cleanhp_50e_baseline_eval/forecasting_losses_val_era5_sampled_geo_wind_residual(norm).csv","logs/era5_cleanhp_50e_c1e2-4_eval/forecasting_losses_val_era5_sampled_geo_wind_residual(norm).csv"],
-            "planetary": ["logs/era5_cleanhp_50e_baseline_eval/forecasting_losses_val_era5_sampled_planetary_residual(norm).csv","logs/era5_cleanhp_50e_c1e2-4_eval/forecasting_losses_val_era5_sampled_planetary_residual(norm).csv"],
-            "qgpv":["logs/era5_cleanhp_50e_baseline_eval/forecasting_losses_val_era5_sampled_qgpv_residual(norm).csv","logs/era5_cleanhp_50e_c1e2-4_eval/forecasting_losses_val_era5_sampled_qgpv_residual(norm).csv"]
-        }
-
-        """for csv in csv_files:
-            for loss in loss_names:
-                if loss in csv:
-                    csv_paths_loss_sorted[loss].append(csv)"""
+    csv_paths_loss_sorted = {
+        "mse": ["reports/figures/evaluation/era5_clean_hp3-baseline-full-retrain-retrain_eval_ood_12/forecasting_losses_mse.csv","reports/figures/evaluation/era5_clean_hp3-c1e2_pv-full-retrain-retrain_eval_ood_12/forecasting_losses_mse.csv"],
+        "mse_change": ["reports/figures/evaluation/era5_clean_hp3-baseline-full-retrain-retrain_eval_ood_12/forecasting_losses_mse_change.csv","reports/figures/evaluation/era5_clean_hp3-c1e2_pv-full-retrain-retrain_eval_ood_12/forecasting_losses_mse_change.csv"],
+        "geo_wind": ["reports/figures/evaluation/era5_clean_hp3-baseline-full-retrain-retrain_eval_ood_12/forecasting_losses_val_era5_sampled_geo_wind_residual(norm).csv","reports/figures/evaluation/era5_clean_hp3-c1e2_pv-full-retrain-retrain_eval_ood_12/forecasting_losses_val_era5_sampled_geo_wind_residual(norm).csv"],
+        "planetary": ["reports/figures/evaluation/era5_clean_hp3-baseline-full-retrain-retrain_eval_ood_12/forecasting_losses_val_era5_sampled_planetary_residual(norm).csv","reports/figures/evaluation/era5_clean_hp3-c1e2_pv-full-retrain-retrain_eval_ood_12/forecasting_losses_val_era5_sampled_planetary_residual(norm).csv"],
+    }
 
     for loss, csv_paths in csv_paths_loss_sorted.items():
-        plot_csv_loss(csv_paths,args.models, loss)
+        plot_csv_loss(csv_paths,models, loss)
 
 if __name__ == "__main__":
     main()

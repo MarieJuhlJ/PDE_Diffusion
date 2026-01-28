@@ -60,7 +60,8 @@ class DiffusionModel(pl.LightningModule):
         model_out = self.model(model_in, steps)
 
         if self.conditional:
-            x0_hat = torch.cat([conditionals[:, 19:34], model_out], dim=1) #hardcoded for now (TODO)
+            num_vars = (conditionals.shape[1] - 8) // 6
+            x0_hat = torch.cat([conditionals[:, num_vars*3+4:-4], model_out], dim=1) #hardcoded for now (TODO)
         else:
             x0_hat = model_out
 
@@ -86,7 +87,8 @@ class DiffusionModel(pl.LightningModule):
         model_out = self.model(noisy_images, steps)
         x0_hat = model_out
         if self.conditional:
-            x0_hat = torch.cat([conditionals[:, 19:34], model_out], dim=1) #hardcoded for now (TODO)
+            num_vars = (conditionals.shape[1] - 8) // 6
+            x0_hat = torch.cat([conditionals[:, num_vars*3+4:-4], model_out], dim=1) #hardcoded for now (TODO)
 
         variance = self.scheduler.posterior_variance[steps]
         self.loss_fn.c_data = self.scheduler.p2_loss_weight[steps]
@@ -110,7 +112,8 @@ class DiffusionModel(pl.LightningModule):
         model_out = self.model(noisy_images, steps)
         x0_hat = model_out
         if self.conditional:
-            x0_hat = torch.cat([conditionals[:, 19:34], model_out], dim=1) #hardcoded for now (TODO)
+            num_vars = (conditionals.shape[1] - 8) // 6
+            x0_hat = torch.cat([conditionals[:, num_vars*3+4:-4], model_out], dim=1) #hardcoded for now (TODO)
 
         variance = self.scheduler.posterior_variance[steps]
         self.loss_fn.c_data = self.scheduler.p2_loss_weight[steps]
@@ -133,14 +136,12 @@ class DiffusionModel(pl.LightningModule):
                     x0_change_pred = x0_hat[:, num_channels//2:, :, :]
                     residual_planetary = self.loss_fn.compute_residual_planetary_vorticity(x0_previous, x0_change_pred).abs().mean()
                     residual_geo_wind = self.loss_fn.compute_residual_geostrophic_wind(x0_previous, x0_change_pred).abs().mean()
-                    residual_qgpv = self.loss_fn.compute_residual_qgpv(x0_previous, x0_change_pred).abs().mean()
                     self.log("val_era5_planetary_residual(norm)", residual_planetary, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
                     self.log("val_era5_geo_wind_residual(norm)", residual_geo_wind, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
-                    self.log("val_era5_qgpv_residual(norm)", residual_qgpv, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
 
                     model_out_reshaped = ein.rearrange(model_out, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
                     target_reshaped = ein.rearrange(target, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
-                    for i in range(5):
+                    for i in range(target_reshaped.shape[2]):
                         mse_var = (self.mse(model_out_reshaped[:,:,i], target_reshaped[:,:,i]) * self.scheduler.p2_loss_weight[steps][:, None, None, None]).mean()
                         self.log(f"val_mse_var_{i}_(weighted)", mse_var, prog_bar=True, on_step=False, on_epoch=True, batch_size=model_out.size(0))
         else:
@@ -163,13 +164,12 @@ class DiffusionModel(pl.LightningModule):
                 with torch.no_grad():
                     val_conditionals = self._uniform_val_batch(n=16)[0].to(self.device)
                     x0_preds = self.sample_loop(batch_size=16, conditionals=val_conditionals)
-                    x0_prev = val_conditionals[:, 19:34]
+                    num_vars = (val_conditionals.shape[1] - 8) // 6
+                    x0_prev = val_conditionals[:, num_vars*3+4:-4]
                     residual_planetary = self.loss_fn.compute_residual_planetary_vorticity(x0_prev, x0_preds).abs().mean()
                     residual_geo_wind = self.loss_fn.compute_residual_geostrophic_wind(x0_prev, x0_preds).abs().mean()
-                    residual_qgpv = self.loss_fn.compute_residual_qgpv(x0_prev, x0_preds).abs().mean()
                 self.log("val_era5_sampled_planetary_residual(norm)", residual_planetary, prog_bar=True, on_epoch=True, sync_dist=True)
                 self.log("val_era5_sampled_geo_wind_residual(norm)", residual_geo_wind, prog_bar=True, on_epoch=True, sync_dist=True)
-                self.log("val_era5_sampled_qgpv_residual(norm)", residual_qgpv, prog_bar=True, on_epoch=True, sync_dist=True)
 
     def _uniform_val_batch(self, n=16):
         vdl = self.trainer.val_dataloaders
