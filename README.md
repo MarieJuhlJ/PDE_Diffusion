@@ -2,7 +2,7 @@
 
 This is a repository for a Master Thesis and it implements physics‑constrained diffusion models for weather forecasting and related PDE problems. It provides training pipelines, evaluation scripts, hyperparameter tuning utilities, and visualization helpers for the ERA5 and Darcy Flow tasks. Use the configs directory and Hydra-style overrides to reproduce experiments or run new trials.
 
-# Data generation
+# :fire: Data generation
 Before running experiments on **Darcy Flow** generate the data using 
 ```bash
 python src/pde_diff/data/darcy_data_generation.py
@@ -75,7 +75,7 @@ plot_cv_val_metrics(model_ids=['modelA','modelB'],fold_num=5,log_path='logs',dat
 - **Extensive visualization functions**: `src/pde_diff/visualize.py` contains an abundance of functions for plotting samples, training metrics, errors etc.
 
 
-## Project structure
+# Project structure
 
 The directory structure of the project looks like this:
 ```txt
@@ -99,7 +99,7 @@ The directory structure of the project looks like this:
 └── tasks.py                  # Project tasks
 ```
 
-## Prerequisites
+# Prerequisites
 
 Make sure you have the following installed on your system:
 
