@@ -14,7 +14,7 @@ save_dir: 'models/'
 
 loss:
   name: mse
-  c_residual: 1e-1 #[vorticity loss (#1 planetary, #2 geostrophic wind, #3 qgpv)]
+  c_residual: 1e-1 #[vorticity loss (#1 planetary, #2 geostrophic wind)]
 
 model:
   name: unet2d_conditional
