@@ -7,6 +7,8 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import matplotlib.font_manager as fm
+import matplotlib.ticker as ticker
+
 import numpy as np
 from omegaconf import OmegaConf
 import pandas as pd
@@ -85,6 +87,14 @@ val_loss_pidm_colors = {
 }
 train_loss_diff_colors = ("#B977F2","#6E5386")
 val_loss_diff_colors   = ("#8800FF","#5900A7")
+
+model_id_to_name={
+        "c1e1": r"c=1e-1",
+        "c1e2": r"c=1e-2",
+        "c1e3": r"c=1e-3",
+        "c1e2_pv": r"$\mathcal{R}_1$: c=1e-2",
+        "c1e2_gw": r"$\mathcal{R}_2$: c=1e-2",
+    }    
 
 def plot_darcy_samples(model_1, model_2, model_id, out_dir=Path("./reports/figures")):
     save_dir = Path(out_dir) / model_id
@@ -287,7 +297,92 @@ def visualize_era5_sample(data_sample, variable, level=500, big_data_sample=None
     plt.savefig(plot_path, bbox_inches='tight', pad_inches=0.05)
     print(f"Saved visualization to {plot_path}")
 
-def visualize_era5_sample_full(big_data_sample, variable, level=500, sample_idx=None, dir=Path("./reports/figures/samples")):
+def visualize_era5_sample_cropped(
+    big_data_sample,
+    variable,
+    level=500,
+    sample_idx=None,
+    dir=Path("./reports/figures/samples"),
+    limits=None,
+    title=None,
+):
+    """
+    Visualize and save a cropped ERA5 sample image.
+
+    Crop:
+    - 20 pixels in from the left
+    - full height
+    - width = 2 * height
+    """
+    fig, ax = plt.subplots(figsize=(4, 2), dpi=200)
+
+    vmin = limits[0] if limits else None
+    vmax = limits[1] if limits else None
+
+    cropped_sample = big_data_sample.T[:, 20:84]
+
+    extent = [20.0, 84, 69.75, 46.5]
+    print(f"{cropped_sample.min()}, {cropped_sample.max()}")
+
+    ax.imshow(
+        cropped_sample,
+        cmap=COLOR_BARS.get(variable, "coolwarm"),
+        origin="lower",
+        extent=extent,
+        vmin=vmin,
+        vmax=vmax,
+    )
+
+    #ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_ylabel("5 h", rotation=0, va="center", labelpad=10)
+    ax.set_xlim(extent[0], extent[1])
+    ax.set_ylim(extent[3], extent[2])
+    ax.set_title(title)
+    
+    # Save cropped image
+    plot_path = (
+        f"era5_sample{sample_idx if sample_idx is not None else ''}_"
+        f"{variable}_{level}hPa_cropped_only{PLOT_TYPE}"
+    )
+    plot_path = dir / plot_path
+
+    plt.savefig(plot_path, bbox_inches='tight', pad_inches=0)
+    print(f"Saved cropped visualization to {plot_path}")
+
+def save_colorbar(
+    variable,
+    vmin,
+    vmax,
+    suffix="",
+    dir=Path("./reports/figures/samples"),
+):
+    fig, ax = plt.subplots(figsize=(0.3, 2))
+
+    cmap = COLOR_BARS.get(variable, "coolwarm")
+    norm = plt.Normalize(vmin=vmin, vmax=vmax)
+
+    cbar= fig.colorbar(
+        plt.cm.ScalarMappable(norm=norm, cmap=cmap),
+        cax=ax,
+        label=f"{VAR_UNITS.get(variable, variable)}"
+    )
+
+    if variable == "z" or variable == "pv":
+        formatter = ticker.ScalarFormatter(useMathText=True)
+        formatter.set_scientific(True)
+        formatter.set_powerlimits((0, 0))  # always use scientific notation
+
+        cbar.formatter = formatter
+        cbar.update_ticks()
+
+    plot_path = dir / f"colorbar_{variable}{suffix}{PLOT_TYPE}"
+    plt.savefig(plot_path, bbox_inches="tight", pad_inches=0)
+    plt.close(fig)
+
+    print(f"Saved colorbar to {plot_path}")
+
+def visualize_era5_sample_full(big_data_sample, variable, level=500, sample_idx=None, dir=Path("./reports/figures/samples"), limits=None):
     """
     Visualize a sample from the ERA5 dataset.
 
@@ -300,12 +395,15 @@ def visualize_era5_sample_full(big_data_sample, variable, level=500, sample_idx=
     """
     # Plot the data
     fig, ax = plt.subplots(figsize=(8,4))
-
+    vmin = limits[0] if limits else None
+    vmax = limits[1] if limits else None
     # Draw entire data
-    ax.imshow(big_data_sample.T, cmap=COLOR_BARS.get(variable, 'coolwarm'), extent=EXTENT_FULL, origin='lower')
+    ax.imshow(big_data_sample.T, cmap=COLOR_BARS.get(variable, 'coolwarm'), extent=EXTENT_SUBSET, origin='lower', vmin=vmin, vmax=vmax)
     #remove all ticks and labels
     ax.set_xticks([])
     ax.set_yticks([])
+    ax.set_xlim(EXTENT_SUBSET[0], EXTENT_SUBSET[1])
+    ax.set_ylim(EXTENT_SUBSET[3], EXTENT_SUBSET[2])
 
     plot_path = f"era5_sample{sample_idx if sample_idx is not None else ''}_{variable}_{level}hPa_full_only"
     plot_path += PLOT_TYPE
@@ -962,14 +1060,6 @@ def plot_cv_val_metrics(model_ids, fold_num, log_path, out_dir, smooth_window=10
         "legend.fontsize": 10,
     })
 
-    model_id_to_name={
-        "c1e1": r"c=1e-1",
-        "c1e2": r"c=1e-2",
-        "c1e3": r"c=1e-3",
-        "c1e2_pv": r"$\mathcal{R}_1$: c=1e-2",
-        "c1e2_gw": r"$\mathcal{R}_2$: c=1e-2",
-    }    
-
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1048,6 +1138,57 @@ def plot_cv_val_metrics(model_ids, fold_num, log_path, out_dir, smooth_window=10
     fig.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved validation metrics plot to {save_path}")
+
+
+def plot_models_train_and_mse(model_ids, log_path="logs", out_dir=Path("./reports/figures/model_comparison"), log_scale=True):
+    """
+    Plot training loss and weighted MSE for a list of models (each model should have a
+    `logs/<model_id>/version_0/metrics.csv` file with at least `epoch`, `train_loss`, and `train_mse_(weighted)` columns).
+
+    Produces a two-panel figure: left = training loss vs epoch, right = train weighted MSE vs epoch.
+    Colors follow the existing ERA5 conventions: use `train_loss_pidm_colors` for training loss when available
+    and `pidm_colors` for MSE lines. Falls back to the matplotlib cycle when a mapping is not found.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # helper to read and aggregate per-epoch mean
+    def load_epoch_stats(model_id):
+        prev_run_exists = False
+        if "retrain" in model_id:
+            # if retrain search for prev version, should be remove fold nr and "retrain"
+            prev_mid = "-".join(model_id.split("-")[:-1])
+            prev_df = load_epoch_stats(prev_mid)
+            prev_run_exists = True
+        csv_path = Path(log_path) / model_id / "version_0" / "metrics.csv"
+        df = pd.read_csv(csv_path).apply(pd.to_numeric, errors="coerce").dropna(subset=["step"]).sort_values("step")
+
+        if prev_run_exists:
+            last_epoch = prev_df["epoch"].max()
+            df["epoch"]+=last_epoch+1
+            return pd.concat([prev_df, df])
+        return df
+
+    # prepare figure
+    fig, ax_loss = plt.subplots(figsize=(4, 4))
+    stats = [load_epoch_stats(model_id) for model_id in model_ids]
+
+    ax_loss.plot(stats[0]["epoch"], stats[0]["train_loss"].values, label="DDPM Loss/wMSE", color=train_loss_diff_colors[0])
+    ax_loss.plot(stats[0]["epoch"], stats[1]["train_loss"].values, label="PIDM-"+model_id_to_name.get("c1e2_pv", "")+" Loss", color=train_loss_pidm_colors["c1e2_pv"])
+    ax_loss.plot(stats[0]["epoch"], stats[1]["train_mse_(weighted)"].values, label="PIDM-"+model_id_to_name.get("c1e2_pv", "")+" wMSE", color="#D8979C", linestyle='--')
+
+    ax_loss.set_xlabel("Epoch")
+    ax_loss.set_ylabel("Train Loss")
+    ax_loss.set_title("Training Loss per Epoch")
+    ax_loss.set_yscale("log")
+    ax_loss.grid(True, alpha=0.3)
+    ax_loss.legend()
+
+    save_path = out_dir / f"{'_vs_'.join(model_ids)}_train_loss{PLOT_TYPE}"
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved comparison plot to {save_path}")
 
 def plot_and_save_era5(csv_path, out_dir, loss_title="Loss", residual_title="Residuals & MSE", log_scale=False):
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1388,16 +1529,24 @@ def era5_residuals_plot(model, conditional, model_id, normalize=True):
 if __name__ == "__main__":
     from pde_diff.utils import DatasetRegistry, LossRegistry
     plot_darcy = False
-    plot_data_samples = False
-    plot_era5_training = True
+    plot_data_samples = True
+    plot_era5_training = False
     plot_era5_residual = False
-    plot_era5_residual_metrics = True
-    plot_era5_individual_var_mse = True
+    plot_era5_residual_metrics = False
+    plot_era5_individual_var_mse = False
     era5_latex = False
     plot_darcy_sample = False
 
     model_path = Path('./models')
     model_ids = ['era5_clean_hp3-baseline-retrain-retrain','era5_clean_hp3-c1e2_pv-retrain-retrain']
+
+    # Quick comparison plot for simple training logs (epoch, step, train_loss, train_mse_(weighted))
+    plot_era5_long_compare_models = False
+    
+    if plot_era5_long_compare_models:
+        compare_model_ids = ['era5_clean_hp3-baseline-full-retrain-retrain','era5_clean_hp3-c1e2_pv-full-retrain-retrain']
+
+        plot_models_train_and_mse(compare_model_ids, log_path="logs", out_dir=Path(f"reports/figures/compare_models"), log_scale=False)
 
     if plot_era5_training:
         # PLOT ERA 5 LOSS:
@@ -1517,16 +1666,16 @@ if __name__ == "__main__":
         cfg = OmegaConf.load(config_path)
         cfg.normalize = False
         cfg.lat_range = None
-        era5_dataset_full = ERA5Dataset(cfg)
+        #era5_dataset_full = ERA5Dataset(cfg)
 
         # Visualize all variables of a sample from the dataset
         sample_idx = 0  # Index of the sample to visualize
         variable = "t"  # Variable to visualize
         level = 500  # Pressure level in hPa
-        for variable in cfg.atmospheric_features:
-            data_sample = get_data_sample(era5_dataset, sample_idx, variable, level)
-            data_sample_full = get_data_sample(era5_dataset_full, sample_idx, variable, level)
-            visualize_era5_sample(data_sample, variable, level, big_data_sample=data_sample_full)
+        #for variable in cfg.atmospheric_features:
+        #    data_sample = get_data_sample(era5_dataset, sample_idx, variable, level)
+        #    data_sample_full = get_data_sample(era5_dataset_full, sample_idx, variable, level)
+        #    visualize_era5_sample(data_sample, variable, level, big_data_sample=data_sample_full)
 
         # Visualize the noise schedule
         config_path = Path("configs/scheduler/ddpm.yaml")
@@ -1535,12 +1684,13 @@ if __name__ == "__main__":
         scheduler = SchedulerRegistry.create(cfg_scheduler)
 
         variable = "t"
-        data_sample = get_data_sample(era5_dataset, sample_idx, variable, level)
+        #data_sample = get_data_sample(era5_dataset, sample_idx, variable, level)
+        _,change = era5_dataset[0]
 
-        #visualize_noise_schedule(scheduler, data_sample, variable, level, sample_idx)
+        visualize_noise_schedule(scheduler, change[10], variable, level, sample_idx)
 
         # Visualize a full sample from the dataset without the subset overlay
-        visualize_era5_sample_full(data_sample_full, variable, level)
+        #visualize_era5_sample_full(data_sample_full, variable, level)
 
         # Visualize time series
         #for variable in cfg.atmospheric_features:

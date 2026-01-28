@@ -1,5 +1,3 @@
-import matplotlib.ticker as ticker
-
 from pde_diff.visualize import *
 
 RES_NAMES = {
@@ -99,7 +97,7 @@ def plot_sample_target_absdiff_stacked(
         vmax=vmax,
         aspect="auto",
     )
-    ax1.set_title(rf"Prediction of {var_name}, $\hat{{{var}}}_0$")
+    ax1.set_title(rf"Prediction of {var_name}, $\tilde{{{var}}}_0$")
     ax1.set_xticklabels([])
     ax1.set_xlim(EXTENT_SUBSET[0], EXTENT_SUBSET[1])
     ax1.set_ylim(EXTENT_SUBSET[2],EXTENT_SUBSET[3])
@@ -126,7 +124,7 @@ def plot_sample_target_absdiff_stacked(
         extent=EXTENT_SUBSET,
         aspect="auto",
     )
-    ax3.set_title(rf"MAE of {var_name}, $|{{{var}}}_0-\hat{{{var}}}_0|$")
+    ax3.set_title(rf"MAE of {var_name}, $|{{{var}}}_0-\tilde{{{var}}}_0|$")
     ax3.set_xlim(EXTENT_SUBSET[0], EXTENT_SUBSET[1])
     ax3.set_ylim(EXTENT_SUBSET[2],EXTENT_SUBSET[3])
     print(f"Max absolute difference for variable {var_name}, sample {sample_idx}: {diff.max():.4f}")
@@ -221,7 +219,7 @@ def plot_forecasts_vs_targets(
             if i < 4:
                 axs.set_xticklabels([])
         # Step numbering on the left
-        ax_f.set_ylabel(f"Step {i+1}", rotation=0, labelpad=15, va="center")
+        ax_f.set_ylabel(f"{i+1} h", rotation=0, labelpad=15, va="center")
 
         axes_forecast.append(ax_f)
         axes_target.append(ax_t)
@@ -229,13 +227,13 @@ def plot_forecasts_vs_targets(
 
     
     if states:
-        axes_forecast[0].set_title(rf"Forecasts of {var_name}, $\hat{{{var}}}_0$")
+        axes_forecast[0].set_title(rf"Forecasts of {var_name}, $\tilde{{{var}}}_0$")
         axes_target[0].set_title(rf"True states of {var_name}, ${{{var}}}_0$")
-        axes_diff[0].set_title(rf"MAE, $|{{{var}}}_0-\hat{{{var}}}_0|$")
+        axes_diff[0].set_title(rf"MAE, $|{{{var}}}_0-\tilde{{{var}}}_0|$")
     else:
-        axes_forecast[0].set_title(rf"Forecasts of {var_name}, $\Delta \hat{{{var}}}_0$")
+        axes_forecast[0].set_title(rf"Forecasts of {var_name}, $\Delta \tilde{{{var}}}_0$")
         axes_target[0].set_title(rf"True changes of {var_name}, $\Delta {{{var}}}_0$")
-        axes_diff[0].set_title(rf"MAE, $|\Delta {{{var}}}_0- \Delta \hat{{{var}}}_0|$")
+        axes_diff[0].set_title(rf"MAE, $|\Delta {{{var}}}_0- \Delta \tilde{{{var}}}_0|$")
 
     cax = fig.add_subplot(gs[:, 2])
     cbar = plt.colorbar(im, cax=cax)
@@ -343,7 +341,7 @@ def plot_forecast_error_distributions(
         ax.axvline(mean + std, linestyle="--", linewidth=1.2, color=colors[lvl])
 
     ax.set_title(rf"Prediction errors of ${var}$" if variable!="pv" else r"Forecast errors of $q_{E}$")
-    ax.set_xlabel(rf"$\Delta \hat{{{var}}}_0 - \Delta {{{var}}}_0$")
+    ax.set_xlabel(rf"$\Delta \tilde{{{var}}}_0 - \Delta {{{var}}}_0$")
     ax.set_xlim(lo, hi)
     ax.set_ylabel("Count")
     ax.legend()
@@ -429,7 +427,7 @@ def plot_residuals_with_truth(
         vmax=vmax,
         aspect="auto",
     )
-    ax1.set_title( rf"{res_name} residual on forecast $\mathcal{{R}}_{{\mathrm{{{res_number}}}}}(\hat{{\mathbf{{x}}}}_0)$")
+    ax1.set_title( rf"{res_name} residual on forecast $\mathcal{{R}}_{{\mathrm{{{res_number}}}}}(\tilde{{\mathbf{{x}}}}_0)$")
 
     # --- True-state residual ---
     im2 = ax2.imshow(
@@ -458,7 +456,7 @@ def plot_residuals_with_truth(
             vmin=vmin_diff,
             vmax=vmax_diff
         )
-        ax3.set_title(rf"Residual difference $|\mathcal{{R}}_{{\mathrm{{{res_number}}}}}(\hat{{\mathbf{{x}}}}_0) - \mathcal{{R}}_{{\mathrm{{{res_number}}}}}(\mathbf{{x}}_0)|$")
+        ax3.set_title(rf"Residual difference $|\mathcal{{R}}_{{\mathrm{{{res_number}}}}}(\tilde{{\mathbf{{x}}}}_0) - \mathcal{{R}}_{{\mathrm{{{res_number}}}}}(\mathbf{{x}}_0)|$")
         plt.colorbar(im3, cax=cax_bot, label=res_unit)
 
         print(
@@ -483,6 +481,151 @@ def plot_residuals_with_truth(
     plt.close()
 
     print(f"Saved residual plot to {out_path}")
+
+def plot_recursive_residuals(
+    residuals_pred: list,   # list of tensors or numpy arrays, length = 5
+    residuals_true: list,   # list of tensors or numpy arrays, length = 5
+    name: str,
+    sample_idx: int = 0,
+    dir=Path("./reports/figures/samples"),
+    limits=None,
+):
+    """
+    Plot recursive residuals on forecast vs true state.
+
+    Left column: residuals on forecast
+    Middle column: residuals on true state
+    Right column: absolute residual difference
+    One shared colorbar for residuals and one for differences.
+    """
+
+    assert len(residuals_pred) == len(residuals_true) == 5, "Expect exactly 5 steps"
+
+    res_name, res_number, res_unit = RES_NAMES[name]
+
+    # Convert to numpy
+    residuals_pred = [
+        r.detach().cpu().numpy() if hasattr(r, "detach") else r
+        for r in residuals_pred
+    ]
+    residuals_true = [
+        r.detach().cpu().numpy() if hasattr(r, "detach") else r
+        for r in residuals_true
+    ]
+
+    diffs = [np.abs(p - t) for p, t in zip(residuals_pred, residuals_true)]
+
+    # Shared color scales
+    vmin = (
+        min(r.min() for r in residuals_pred + residuals_true)
+        if not limits else limits[0]
+    )
+    vmax = (
+        max(r.max() for r in residuals_pred + residuals_true)
+        if not limits else limits[1]
+    )
+    vmin_d = min(d.min() for d in diffs) if not limits else limits[2]
+    vmax_d = max(d.max() for d in diffs) if not limits else limits[3]
+
+    print(f"{name} residual limits: {vmin}, {vmax}")
+    print(f"{name} residual diff limits: {vmin_d}, {vmax_d}")
+
+    fig = plt.figure(figsize=(10, 2.4), constrained_layout=True)
+    fig.set_constrained_layout_pads(
+        w_pad=0.02,
+        h_pad=0.01,
+        wspace=0.02,
+        hspace=0.02,
+    )
+
+    # 5 rows × (pred | true | cbar | diff | cbar)
+    gs = fig.add_gridspec(
+        nrows=5,
+        ncols=5,
+        width_ratios=[1, 1, 0.05, 1, 0.05],
+        hspace=0.00,
+        wspace=0.05,
+    )
+
+    axes_pred = []
+    axes_true = []
+    axes_diff = []
+
+    for i in range(5):
+        ax_p = fig.add_subplot(gs[i, 0])
+        ax_t = fig.add_subplot(gs[i, 1])
+        ax_d = fig.add_subplot(gs[i, 3])
+
+        im = ax_p.imshow(
+            residuals_pred[i].T,
+            cmap="magma",
+            vmin=vmin,
+            vmax=vmax,
+            aspect="auto",
+            extent=EXTENT_SUBSET,
+        )
+
+        ax_t.imshow(
+            residuals_true[i].T,
+            cmap="magma",
+            vmin=vmin,
+            vmax=vmax,
+            aspect="auto",
+            extent=EXTENT_SUBSET,
+        )
+
+        im_diff = ax_d.imshow(
+            diffs[i].T,
+            cmap="Oranges",
+            vmin=vmin_d,
+            vmax=vmax_d,
+            aspect="auto",
+            extent=EXTENT_SUBSET,
+        )
+
+        for axs in (ax_p, ax_t, ax_d):
+            axs.set_xlim(EXTENT_SUBSET[0], EXTENT_SUBSET[1])
+            axs.set_ylim(EXTENT_SUBSET[2], EXTENT_SUBSET[3])
+            axs.set_yticks([])
+            if i < 4:
+                axs.set_xticklabels([])
+
+        ax_p.set_ylabel(f"Step {i+1}", rotation=0, labelpad=15, va="center")
+
+        axes_pred.append(ax_p)
+        axes_true.append(ax_t)
+        axes_diff.append(ax_d)
+
+    # Titles
+    axes_pred[0].set_title(
+        rf"{res_name} residual on forecast $\mathcal{{R}}_{{\mathrm{{{res_number}}}}}(\tilde{{\mathbf{{x}}}}_0)$"
+    )
+    axes_true[0].set_title(
+        rf"{res_name} residual on true state $\mathcal{{R}}_{{\mathrm{{{res_number}}}}}(\mathbf{{x}}_0)$"
+    )
+    axes_diff[0].set_title(
+        rf"Residual MAE $|\mathcal{{R}}(\tilde{{\mathbf{{x}}}}_0) - \mathcal{{R}}(\mathbf{{x}}_0)|$"
+    )
+
+    # Colorbars
+    cax = fig.add_subplot(gs[:, 2])
+    cbar = plt.colorbar(im, cax=cax)
+    cbar.set_label(res_unit, labelpad=0)
+
+    cax2 = fig.add_subplot(gs[:, 4])
+    cbar2 = plt.colorbar(im_diff, cax=cax2)
+    cbar2.set_label(res_unit, labelpad=0)
+
+    out_path = os.path.join(
+        dir,
+        f"recursive_residual_{res_name.replace(' ', '_')}_sample_{sample_idx}.png",
+    )
+
+    plt.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close()
+
+    print(f"Saved recursive residual plot to {out_path}")
+
 
 def plot_mse_of_vars(mse_map, out_dir,var):
     plt.figure(figsize=(6,3))
@@ -510,7 +653,7 @@ def plot_mse_of_all_vars(mse_maps, out_dir,vars):
         ax = fig.add_subplot(gs[i, 0])
 
         im = ax.imshow(mse_maps[i].T, extent=EXTENT_SUBSET, origin="lower", cmap="viridis")  # transpose if needed to orient correctly
-        ax.set_title(rf"Test MSE of $\small{{{{{var_name}}} , ||\Delta \hat{{{var_name}}}_0 - \Delta {{{var_name}}}_0||^2}}$")
+        ax.set_title(rf"Test MSE of $\small{{{{{var_name}}} , ||\Delta \tilde{{{var_name}}}_0 - \Delta {{{var_name}}}_0||^2}}$")
         ax.set_yticklabels([])
         ax.set_yticks([])
         if i<4:
