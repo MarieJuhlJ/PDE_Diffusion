@@ -27,13 +27,23 @@ def evaluate(cfg: DictConfig):
     model_path = cfg.model.path.split("/")[0] + "/" + best_fold[0]
     model_cfg = OmegaConf.load(model_path + "/config.yaml")
     cfg = OmegaConf.merge(model_cfg, cfg)
+    cfg.dataset.max_year = 2025  # make sure we allow evaluation on 2025 data
 
     pl.seed_everything(cfg.seed)
     model = DiffusionModel(cfg)
     model = model.to("cuda" if torch.cuda.is_available() else "cpu")
     model.load_state_dict(torch.load(model_path + "/best-val_loss-weights.pt"))
 
-    cfg.dataset.path= "./data/era5/zarr_test_ood/"
+    if cfg.dataset.type == "test":
+        cfg.dataset.path= "./data/era5/zarr_test/"
+        name = cfg.experiment.name + "-" +cfg.id+"_eval"
+    else:
+        test_type = cfg.dataset.get("type", "ood")
+        cfg.dataset.path= "./data/era5/zarr_test_"+test_type +"/"
+        name = cfg.experiment.name + "-" +cfg.id+"_eval_"+test_type
+    if cfg.steps!=5:
+        name += f"_{cfg.steps}steps"
+    
     OmegaConf.set_struct(cfg, True)
     with open_dict(cfg):
         cfg.dataset.forecast_steps = cfg.steps #TODO: this config stuff could be nicer...
@@ -44,8 +54,8 @@ def evaluate(cfg: DictConfig):
                                  shuffle=False,
                                  num_workers=4,
                                  persistent_workers=True)
+    
     dir = "reports/figures/evaluation"
-    name = cfg.experiment.name + "-" +cfg.id+"_eval_ood"
     os.makedirs(dir, exist_ok=True)
     logger = pl.pytorch.loggers.CSVLogger(dir, name=name)
     if True:
@@ -183,20 +193,37 @@ def evaluate_forecasting(model: DiffusionModel, dataset_test: Dataset, steps: in
         raw_target_states = raw_target_states[0].to(model.device)
 
         forecasted_changes = model.forecast(conditionals, steps=steps)[0]
-        forecasted_states = get_states(conditionals, forecasted_changes)
-        target_states = get_states(conditionals,targets)
-        num_vars = (conditionals.shape[1] - 8) // 6
-        prev_states_true = torch.cat([conditionals[:, num_vars*3+4:-4],target_states[:-1]], dim=0)
-        prev_states = torch.cat([conditionals[:, num_vars*3+4:-4],forecasted_states[:-1]], dim=0)
+
+        # Unnormalize everything to be able to add together and then normalize to have states for mse
+        conditionals_rearranged = ein.rearrange(conditionals, "b (state var) lon lat -> b state var lon lat", state = 2)
+        un_norm_cond = dataset_test._unnormalize(conditionals_rearranged[:,1,:15].detach().cpu(), dataset_test.means, dataset_test.stds)
+        un_norm_forecasted_changes = dataset_test._unnormalize(forecasted_changes.detach().cpu(), dataset_test.diff_means, dataset_test.diff_stds)
+        un_norm_forecasted_states = get_states(un_norm_cond, un_norm_forecasted_changes)
+        norm_forecasted_state = dataset_test._normalize(un_norm_forecasted_states.detach().cpu(), dataset_test.means, dataset_test.stds)
+        prev_states = torch.cat([conditionals[:, 19:-4],norm_forecasted_state[:-1].to(model.device)], dim=0)
+        
+        un_norm_targets = dataset_test._unnormalize(targets.detach().cpu(), dataset_test.diff_means, dataset_test.diff_stds)
+        un_norm_target_states = get_states(un_norm_cond, un_norm_targets)
+        norm_target_states = dataset_test._normalize(un_norm_target_states.detach().cpu(), dataset_test.means, dataset_test.stds)
+        prev_states_true = torch.cat([conditionals[:, 19:-4],norm_target_states[:-1].to(model.device)], dim=0)
+
+        # Rearrange to easier format:
+        un_norm_forecasted_states = ein.rearrange(un_norm_forecasted_states, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
+        un_norm_target_states = ein.rearrange(un_norm_target_states, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
+        un_norm_targets = ein.rearrange(un_norm_targets, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
+        un_norm_forecasted_changes = ein.rearrange(un_norm_forecasted_changes, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
+
+        raw_target_states = ein.rearrange(raw_target_states, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
+        assert torch.allclose(raw_target_states.detach().cpu(),un_norm_target_states,atol=1e-5,rtol=1e-6), "Problem, norm back and forth changing values too much"
+
         for loss_name, loss_fn in loss_fns.items():
             if loss_name=="mse":
                 for k in range(steps):
-                    l = loss_fn(forecasted_states[k], target_states[k])
-                    loss[loss_name][str(k+1)].append(l.item())
-            elif loss_name=="mse_change":
-                for k in range(steps):
+                    l = loss_fn(norm_forecasted_state[k], norm_target_states[k])
+                    loss["mse"][str(k+1)].append(l.item())
+                
                     l = loss_fn(forecasted_changes[k], targets[k])
-                    loss[loss_name][str(k+1)].append(l.item())
+                    loss["mse_change"][str(k+1)].append(l.item())
             else:
                 loss_geo_wind = loss_fn.compute_residual_geostrophic_wind(x0_previous=prev_states, x0_change_pred=forecasted_changes, normalize=True).abs()
                 mean_loss_geo_wind = loss_geo_wind.mean(dim=(1, 2, 3))
@@ -225,76 +252,111 @@ def evaluate_forecasting(model: DiffusionModel, dataset_test: Dataset, steps: in
             loss_geo_wind_target = loss_fn.compute_residual_geostrophic_wind(x0_previous=prev_states_true, x0_change_pred=targets, normalize=True).abs()
             loss_planetary_target = loss_fn.compute_residual_planetary_vorticity(x0_previous=prev_states_true, x0_change_pred=targets, normalize=True).abs()
 
-            limits = {
-                "plan": (2.966096644740901e-06, 13.07596206665039,2.3655593395233154e-06, 10.719855308532715),
-                "gw": (7.870156878198031e-06, 5.983729839324951,1.1920928955078125e-06, 0.7330731153488159),
-            }
-
-            plot_residuals_with_truth(loss_geo_wind[0,lvl],loss_geo_wind_target[0,lvl],"gw",sample_idx=0, dir=dir_sample, limits=limits["gw"])
-            plot_residuals_with_truth(loss_planetary[0],loss_planetary_target[0],"plan", sample_idx=0,dir=dir_sample, limits=limits["plan"])
-
-            conditionals_rearranged = ein.rearrange(conditionals, "b (state var) lon lat -> b state var lon lat", state = 2)
-            un_norm_cond = dataset_test._unnormalize(conditionals_rearranged[:,1,:15].detach().cpu(), dataset_test.means, dataset_test.stds)
-            un_norm_forecasted_changes = dataset_test._unnormalize(forecasted_changes.detach().cpu(), dataset_test.diff_means, dataset_test.diff_stds)
-            un_norm_forecasted_states = get_states(un_norm_cond, un_norm_forecasted_changes)
-            un_norm_forecasted_states = ein.rearrange(un_norm_forecasted_states, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
-
-            un_norm_targets = dataset_test._unnormalize(targets.detach().cpu(), dataset_test.diff_means, dataset_test.diff_stds)
-            un_norm_target_states = get_states(un_norm_cond, un_norm_targets)
-            un_norm_target_states = ein.rearrange(un_norm_target_states, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
-
-            un_norm_targets = ein.rearrange(un_norm_targets, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
-            un_norm_forecasted_changes = ein.rearrange(un_norm_forecasted_changes, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
-
-            # un_norm_forecasted_states has shape [steps, levels,vars, lon, lat]
-            #un_norm_forecasted_states =loss_fns["residual"].get_original_states(x0_previous=prev_states, x0_change_pred=forecasted_changes)[1]
-            #un_norm_target_states =loss_fns["residual"].get_original_states(x0_previous=prev_states_true, x0_change_pred=targets[0])[1]
-
-            raw_target_states = ein.rearrange(raw_target_states, "b (var lev) lon lat -> b lev var lon lat", lev = 3)
-            assert torch.allclose(raw_target_states.detach().cpu(),un_norm_target_states,atol=1e-5,rtol=1e-6), "Problem, norm back and forth changing values too much"
-
             # Plot limits var : [(states), (changes)]
             limits_combined = {
+                "plan": (
+                    2.966096644740901e-06,
+                    16.161096572875977,
+                    2.3655593395233154e-06,
+                    11.609301567077637,
+                ),
+                "gw": (
+                    7.870156878198031e-06,
+                    6.071494102478027,
+                    1.1920928955078125e-06,
+                    0.9449801445007324,
+                ),
                 "u": [
-                    (-25.34462, 57.650707, 6.1392784e-06, 20.092274),
-                    (-10.266342, 11.275477, 2.041459e-06, 13.979344),
+                    # state
+                    (-27.923988, 57.87153, 0.0, 20.911308),
+                    # change
+                    (-14.553025, 12.021248, 2.30968e-07, 14.321833),
                 ],
                 "v": [
-                    (-38.033234, 51.942154, 5.9604645e-06, 18.638378),
-                    (-20.54956, 12.931, 2.3841858e-06, 14.197182),
+                    # state
+                    (-43.148815, 56.505905, 5.9604645e-06, 28.212692),
+                    # change
+                    (-26.843092, 12.931, 2.3841858e-06, 15.12248),
                 ],
                 "pv": [
-                    (-1.3699745e-06, 5.4534376e-06, 3.410605e-13, 3.9785564e-06),
-                    (-2.7604012e-06, 3.20898e-06, 2.8386182e-12, 2.8250042e-06),
+                    # state
+                    (-2.7383967e-06, 5.482249e-06, 3.410605e-13, 3.9785564e-06),
+                    # change
+                    (-3.9072256e-06, 5.03554e-06, 2.0321522e-12, 3.7436766e-06),
                 ],
                 "t": [
-                    (234.98526, 266.46527, 0.0, 11.396439),
-                    (-4.2630463, 3.8316803, 1.5199184e-06, 3.2969234),
+                    # state
+                    (234.81334, 267.8742, 0.0, 11.396439),
+                    # change
+                    (-4.2764883, 3.8316803, 1.5199184e-06, 3.9365826),
                 ],
                 "z": [
-                    (49978.4, 57700.15, 0.0, 725.2578),
-                    (-384.3789, 317.4961, 7.772446e-05, 271.37427),
+                    # state
+                    (49978.4, 57700.15, 0.0, 893.7383),
+                    # change
+                    (-394.34598, 317.4961, 7.772446e-05, 301.08643),
                 ],
             }
 
+            plot_residuals_with_truth(loss_geo_wind[0,lvl],loss_geo_wind_target[0,lvl],"gw",sample_idx=0, dir=dir_sample, limits=limits_combined["gw"])
+            plot_residuals_with_truth(loss_planetary[0],loss_planetary_target[0],"plan", sample_idx=0,dir=dir_sample, limits=limits_combined["plan"])
+            if steps==5:
+                plot_recursive_residuals(loss_planetary,loss_planetary_target,"plan", sample_idx=0,dir=dir_sample)
+                plot_recursive_residuals(loss_geo_wind,loss_geo_wind_target,"gw", sample_idx=0,dir=dir_sample)
+            
             # Plot all targets and forecasts:
-            for j,var in enumerate(["u","v","pv","t","z"]):
-                plot_forecasts_vs_targets(
-                    forecasts=[un_norm_forecasted_states.detach().cpu()[k,lvl, j,:,:].detach().cpu() for k in range(un_norm_forecasted_states.shape[0])],
-                    targets=[raw_target_states.detach().cpu()[k,lvl, j,:,:] for k in range(un_norm_target_states.shape[0])],
-                    variable=var,
-                    sample_idx=i,
-                    dir=dir_sample,
-                    limits=limits_combined[var][0])
-                plot_forecasts_vs_targets(
-                    forecasts=[un_norm_forecasted_changes.detach().cpu()[k,lvl, j,:,:].detach().cpu() for k in range(un_norm_forecasted_states.shape[0])],
-                    targets=[un_norm_targets.detach().cpu()[k,lvl, j,:,:] for k in range(un_norm_target_states.shape[0])],
-                    variable=var,
-                    sample_idx=i,
-                    dir=dir_sample,
-                    states=False,
-                    limits=limits_combined[var][1])
+            if steps==5:
+                for j,var in enumerate(["u","v","pv","t","z"]):
+                    plot_forecasts_vs_targets(
+                        forecasts=[un_norm_forecasted_states.detach().cpu()[k,lvl, j,:,:].detach().cpu() for k in range(un_norm_forecasted_states.shape[0])],
+                        targets=[raw_target_states.detach().cpu()[k,lvl, j,:,:] for k in range(un_norm_target_states.shape[0])],
+                        variable=var,
+                        sample_idx=i,
+                        dir=dir_sample,
+                        limits=limits_combined[var][0]
+                        )
+                    plot_forecasts_vs_targets(
+                        forecasts=[un_norm_forecasted_changes.detach().cpu()[k,lvl, j,:,:].detach().cpu() for k in range(un_norm_forecasted_states.shape[0])],
+                        targets=[un_norm_targets.detach().cpu()[k,lvl, j,:,:] for k in range(un_norm_target_states.shape[0])],
+                        variable=var,
+                        sample_idx=i,
+                        dir=dir_sample,
+                        states=False,
+                        limits=limits_combined[var][1]
+                        )
+                    dir_sample_var=os.path.join(dir_sample, "raw_images_cropped")
+                    os.makedirs(dir_sample_var, exist_ok=True)
+                    var_name = VAR_NAMES.get(var, var)
+                    var_full_name = VAR_FULL_NAMES.get(var, var)
+                    visualize_era5_sample_cropped(un_norm_forecasted_states.detach().cpu()[4,lvl, j,:,:].detach().cpu(), 
+                                               var,
+                                               sample_idx=f"_forecast_state_{i}_step4_",
+                                               limits=limits_combined[var][0],
+                                               dir=Path(dir_sample_var),
+                                               title=rf"Forecast state of {var_full_name}, $\tilde{{{var_name}}}_0$")
+                    visualize_era5_sample_cropped(raw_target_states.detach().cpu()[4,lvl, j,:,:].detach().cpu(), 
+                                               var,
+                                               sample_idx=f"_true_state_{i}_step4_",
+                                               limits=limits_combined[var][0],
+                                               dir=Path(dir_sample_var),
+                                               title=rf"True state of {var_full_name}, ${{{var_name}}}_0$")
+                    save_colorbar(var,limits_combined[var][0][0],limits_combined[var][0][1], suffix="_state",dir=Path(dir_sample_var))
+                    visualize_era5_sample_cropped(un_norm_forecasted_changes.detach().cpu()[4,lvl, j,:,:].detach().cpu(), 
+                                               var,
+                                               sample_idx=f"_forecast_change_{i}_step4_",
+                                               limits=limits_combined[var][1],
+                                               dir=Path(dir_sample_var),
+                                               title=rf"Forecast change of {var_full_name}, $\Delta \tilde{{{var_name}}}_0$")
+                    visualize_era5_sample_cropped(un_norm_targets.detach().cpu()[4,lvl, j,:,:].detach().cpu(), 
+                                               var,
+                                               sample_idx=f"_true_change_{i}_step4_",
+                                               limits=limits_combined[var][1],
+                                               dir=Path(dir_sample_var),
+                                               title=rf"True change of {var_full_name}, $\Delta {{{var_name}}}_0$")
+                    save_colorbar(var,limits_combined[var][1][0],limits_combined[var][1][1], suffix="_change",dir=Path(dir_sample_var))
 
+                exit()
+                    
             #save_samples(un_norm_forecasted_states[:,lvl].detach().cpu(), dir=dir_sample, target_states=un_norm_target_states[:,lvl].detach().cpu())
         #if i==1:
         #    break

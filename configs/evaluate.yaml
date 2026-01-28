@@ -4,6 +4,7 @@ model:
 steps: 5
 
 dataset:
+  type: test
   path: ./data/era5/zarr_test
 
 
